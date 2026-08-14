@@ -1,0 +1,5 @@
+server/.env
+server/.env.anythingllm.render
+server/node_modules/
+npm-debug.log*
+.DS_Store
