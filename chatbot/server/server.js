@@ -30,13 +30,24 @@ const AUDIO_FILE_EXTENSIONS = Object.freeze({
 });
 
 const WORKSPACES = Object.freeze({
-  mirrorxr: "mirrorxr",
-  augmenthink: "augmenthink",
   clevart: "clevart",
+  augmenthink: "augmenthink",
+  raisewisely: "raisewisely",
+  mirrorxr: "mirrorxr",
 });
 
 function normalizeOrigin(value) {
   return value ? value.trim().replace(/\/$/, "") : "";
+}
+
+function setNoCacheHeaders(response) {
+  response.set({
+    "Cache-Control":
+      "no-store, no-cache, must-revalidate, proxy-revalidate, max-age=0",
+    Expires: "0",
+    Pragma: "no-cache",
+    "Surrogate-Control": "no-store",
+  });
 }
 
 function getAssistantMessage(payload) {
@@ -238,6 +249,15 @@ function createApp(options = {}) {
   const fetchImpl = options.fetchImpl || global.fetch;
   const speechCache = new Map();
 
+  function voiceReadiness() {
+    return {
+      configured: Boolean(openAiApiKey),
+      sttModel: openAiSttModel,
+      ttsModel: openAiTtsModel,
+      ttsVoice: openAiTtsVoice,
+    };
+  }
+
   function pruneSpeechCache(now = Date.now()) {
     for (const [id, item] of speechCache) {
       if (item.expiresAt <= now) speechCache.delete(id);
@@ -259,6 +279,7 @@ function createApp(options = {}) {
   }
 
   app.disable("x-powered-by");
+  app.disable("etag");
   app.set("trust proxy", 1);
 
   app.use((request, response, next) => {
@@ -299,17 +320,22 @@ function createApp(options = {}) {
   });
 
   const widgetDirectory = path.resolve(__dirname, "../widget");
+  const assetsDirectory = path.resolve(__dirname, "../assets");
   app.get("/", (_request, response) => {
-    response.setHeader("Cache-Control", "no-store");
+    setNoCacheHeaders(response);
     response.sendFile(path.join(widgetDirectory, "preview.html"));
   });
   app.get("/chat-widget.js", (_request, response) => {
-    response.setHeader("Cache-Control", "no-store");
+    setNoCacheHeaders(response);
     response.sendFile(path.join(widgetDirectory, "chat-widget.js"));
   });
   app.get("/chat-widget.css", (_request, response) => {
-    response.setHeader("Cache-Control", "no-store");
+    setNoCacheHeaders(response);
     response.sendFile(path.join(widgetDirectory, "chat-widget.css"));
+  });
+  app.get("/assets/CLEO.jpg", (_request, response) => {
+    setNoCacheHeaders(response);
+    response.sendFile(path.join(assetsDirectory, "CLEO.jpg"));
   });
 
   app.get("/api/readiness", async (_request, response) => {
@@ -319,12 +345,7 @@ function createApp(options = {}) {
         gateway: true,
         anythingLlm: false,
         apiConfigured: false,
-        voice: {
-          configured: Boolean(openAiApiKey),
-          sttModel: openAiSttModel,
-          ttsModel: openAiTtsModel,
-          ttsVoice: openAiTtsVoice,
-        },
+        voice: voiceReadiness(),
         workspaces: Object.fromEntries(
           Object.keys(WORKSPACES).map((workspace) => [workspace, false]),
         ),
@@ -356,12 +377,7 @@ function createApp(options = {}) {
         gateway: true,
         anythingLlm: true,
         apiConfigured: true,
-        voice: {
-          configured: Boolean(openAiApiKey),
-          sttModel: openAiSttModel,
-          ttsModel: openAiTtsModel,
-          ttsVoice: openAiTtsVoice,
-        },
+        voice: voiceReadiness(),
         workspaces,
       });
     } catch (_error) {
@@ -370,12 +386,7 @@ function createApp(options = {}) {
         gateway: true,
         anythingLlm: false,
         apiConfigured: true,
-        voice: {
-          configured: Boolean(openAiApiKey),
-          sttModel: openAiSttModel,
-          ttsModel: openAiTtsModel,
-          ttsVoice: openAiTtsVoice,
-        },
+        voice: voiceReadiness(),
         workspaces: Object.fromEntries(
           Object.keys(WORKSPACES).map((workspace) => [workspace, false]),
         ),
@@ -555,9 +566,10 @@ function createApp(options = {}) {
             ? request.query.workspace
             : "augmenthink";
         const workspaceName = {
-          mirrorxr: "MirrorXR",
+          clevart: "Creart Digital Media",
           augmenthink: "Augmenthink",
-          clevart: "Clevart",
+          raisewisely: "RaiseWisely",
+          mirrorxr: "Mirror XR",
         }[workspace];
         form.append("model", openAiSttModel);
         form.append("languages[]", "en");
@@ -567,9 +579,10 @@ function createApp(options = {}) {
         );
         for (const keyword of [
           workspaceName,
-          "MirrorXR",
+          "Creart Digital Media",
           "Augmenthink",
-          "Clevart",
+          "RaiseWisely",
+          "Mirror XR",
           "AnythingLLM",
         ]) {
           form.append("keywords[]", keyword);

@@ -54,23 +54,44 @@ test("gateway serves a widget-only preview and widget assets", async (t) => {
   const cssResponse = await fetch(`${gateway.url}/chat-widget.css`);
   assert.equal(cssResponse.status, 200);
   assert.match(cssResponse.headers.get("content-type"), /text\/css/);
-  assert.equal(cssResponse.headers.get("cache-control"), "no-store");
+  assert.match(cssResponse.headers.get("cache-control"), /no-store/);
+  assert.match(cssResponse.headers.get("cache-control"), /must-revalidate/);
+  assert.equal(cssResponse.headers.get("pragma"), "no-cache");
+  assert.equal(cssResponse.headers.get("surrogate-control"), "no-store");
 
   const widgetResponse = await fetch(`${gateway.url}/chat-widget.js`);
   const widgetScript = await widgetResponse.text();
   assert.equal(widgetResponse.status, 200);
-  assert.equal(widgetResponse.headers.get("cache-control"), "no-store");
-  assert.match(widgetScript, /Clear chat and start a new conversation/);
+  assert.match(widgetResponse.headers.get("cache-control"), /no-store/);
+  assert.doesNotMatch(widgetScript, /assistant-clear-button|clearConversation/);
+  assert.doesNotMatch(widgetScript, /assistant-status|"Ready"|"Checking"/);
   assert.match(widgetScript, /assistant-chat-history-v1/);
   assert.match(widgetScript, /assistant-voice-indicator/);
   assert.match(widgetScript, /Processing voice input/);
   assert.match(widgetScript, /assistant-voice-replies-enabled/);
   assert.match(widgetScript, /spoken replies for voice input/);
+  assert.match(widgetScript, /primeAudioPlayback/);
+  assert.match(widgetScript, /SILENT_AUDIO_DATA_URI/);
+  assert.match(widgetScript, /Play voice reply/);
+  assert.doesNotMatch(widgetScript, /const player = new Audio/);
   assert.match(widgetScript, /await sendMessage\(\{ fromVoice: true \}\)/);
   assert.doesNotMatch(widgetScript, /assistant-mode-switch|assistant:set-mode/);
   assert.match(widgetScript, /api\/speech/);
   assert.doesNotMatch(widgetScript, /assistant-sources|createSources/);
   assert.doesNotMatch(widgetScript, /assistant-suggestions|Try asking|greeting:/);
+  assert.match(widgetScript, /What would you like to know/);
+  assert.doesNotMatch(widgetScript, /Knowledge assistant/);
+  assert.match(widgetScript, /Creart Digital Media/);
+  assert.match(widgetScript, /RaiseWisely/);
+  assert.match(widgetScript, /Mirror XR/);
+  assert.match(widgetScript, /assets\/CLEO\.jpg/);
+  assert.match(widgetScript, /widget-cache/);
+
+  const logoResponse = await fetch(`${gateway.url}/assets/CLEO.jpg`);
+  assert.equal(logoResponse.status, 200);
+  assert.match(logoResponse.headers.get("content-type"), /image\/jpeg/);
+  assert.match(logoResponse.headers.get("cache-control"), /no-store/);
+  assert.ok((await logoResponse.arrayBuffer()).byteLength > 0);
 });
 
 test("readiness confirms API access and required workspaces", async (t) => {
@@ -86,6 +107,7 @@ test("readiness confirms API access and required workspaces", async (t) => {
             { slug: "mirrorxr" },
             { slug: "augmenthink" },
             { slug: "clevart" },
+            { slug: "raisewisely" },
           ],
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
@@ -107,7 +129,12 @@ test("readiness confirms API access and required workspaces", async (t) => {
       ttsModel: "gpt-4o-mini-tts",
       ttsVoice: "cedar",
     },
-    workspaces: { mirrorxr: true, augmenthink: true, clevart: true },
+    workspaces: {
+      clevart: true,
+      augmenthink: true,
+      raisewisely: true,
+      mirrorxr: true,
+    },
   });
 });
 
@@ -324,10 +351,13 @@ test("transcription endpoint forwards recorded audio with accuracy context", asy
     openAiBaseUrl: "https://openai.test/v1",
     fetchImpl: async (url, options) => {
       upstreamRequest = { url, options };
-      return new Response(JSON.stringify({ text: "  Tell me about Clevart.  " }), {
-        status: 200,
-        headers: { "Content-Type": "application/json" },
-      });
+      return new Response(
+        JSON.stringify({ text: "  Tell me about Creart Digital Media.  " }),
+        {
+          status: 200,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
     },
   });
   t.after(() => gateway.server.close());
@@ -344,7 +374,7 @@ test("transcription endpoint forwards recorded audio with accuracy context", asy
   assert.equal(response.status, 200);
   assert.deepEqual(await response.json(), {
     success: true,
-    text: "Tell me about Clevart.",
+    text: "Tell me about Creart Digital Media.",
   });
   assert.equal(upstreamRequest.url, "https://openai.test/v1/audio/transcriptions");
   assert.equal(
@@ -354,8 +384,15 @@ test("transcription endpoint forwards recorded audio with accuracy context", asy
   assert.equal(upstreamRequest.options.body.get("model"), "gpt-transcribe");
   assert.equal(upstreamRequest.options.body.get("languages[]"), "en");
   assert.equal(upstreamRequest.options.body.get("language"), null);
-  assert.match(upstreamRequest.options.body.get("prompt"), /Clevart/);
-  assert.ok(upstreamRequest.options.body.getAll("keywords[]").includes("Clevart"));
+  assert.match(
+    upstreamRequest.options.body.get("prompt"),
+    /Creart Digital Media/,
+  );
+  assert.ok(
+    upstreamRequest.options.body
+      .getAll("keywords[]")
+      .includes("Creart Digital Media"),
+  );
   assert.equal(
     await upstreamRequest.options.body.get("file").text(),
     "recorded-audio",

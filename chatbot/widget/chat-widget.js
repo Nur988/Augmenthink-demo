@@ -12,21 +12,28 @@
   script.dataset.assistantWidgetLoaded = "true";
 
   const WORKSPACES = Object.freeze({
-    mirrorxr: { label: "MirrorXR" },
+    clevart: { label: "Creart Digital Media" },
     augmenthink: { label: "Augmenthink" },
-    clevart: { label: "Clevart" },
+    raisewisely: { label: "RaiseWisely" },
+    mirrorxr: { label: "Mirror XR" },
   });
   const configuredWorkspace = script.dataset.workspace || "augmenthink";
   let workspace = WORKSPACES[configuredWorkspace]
     ? configuredWorkspace
     : "augmenthink";
   const scriptUrl = new URL(script.src, window.location.href);
+  const assetCacheKey = Date.now().toString(36);
+  const avatarUrl = new URL("assets/CLEO.jpg", scriptUrl);
+  avatarUrl.search = scriptUrl.search;
+  avatarUrl.searchParams.set("widget-cache", assetCacheKey);
   const apiUrl = (script.dataset.apiUrl || scriptUrl.origin).replace(/\/$/, "");
   const HISTORY_KEY = "assistant-chat-history-v1";
   const SESSION_KEY_PREFIX = "assistant-chat-session:";
   const VOICE_REPLIES_KEY = "assistant-voice-replies-enabled";
   const REQUEST_TIMEOUT_MS = 35000;
   const AUDIO_REQUEST_TIMEOUT_MS = 60000;
+  const SILENT_AUDIO_DATA_URI =
+    "data:audio/wav;base64,UklGRiUAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQEAAACA";
   const MAX_RECORDING_MS = 45000;
   const NO_SPEECH_TIMEOUT_MS = 8000;
   const SILENCE_STOP_MS = 850;
@@ -159,6 +166,7 @@
   stylesheet.rel = "stylesheet";
   const stylesheetUrl = new URL("chat-widget.css", scriptUrl);
   stylesheetUrl.search = scriptUrl.search;
+  stylesheetUrl.searchParams.set("widget-cache", assetCacheKey);
   stylesheet.href = stylesheetUrl.href;
   root.appendChild(stylesheet);
 
@@ -177,10 +185,16 @@
 
   const header = createElement("header", "assistant-header");
   const identity = createElement("div", "assistant-identity");
-  const avatar = createElement("span", "assistant-avatar", "A");
+  const avatar = createElement("img", "assistant-avatar");
+  avatar.src = avatarUrl.href;
+  avatar.alt = "";
   avatar.setAttribute("aria-hidden", "true");
   const titleGroup = createElement("div", "assistant-title-group");
-  const eyebrow = createElement("span", "assistant-eyebrow", "Knowledge assistant");
+  const eyebrow = createElement(
+    "span",
+    "assistant-eyebrow",
+    "What would you like to know",
+  );
   const workspaceSelect = createElement("select", "assistant-workspace-select");
   workspaceSelect.setAttribute("aria-label", "Choose a workspace");
   Object.entries(WORKSPACES).forEach(([value, config]) => {
@@ -193,8 +207,6 @@
   identity.append(avatar, titleGroup);
 
   const headerActions = createElement("div", "assistant-header-actions");
-  const status = createElement("span", "assistant-status", "Checking");
-  status.setAttribute("role", "status");
   const voiceReplyButton = createElement(
     "button",
     "assistant-header-voice",
@@ -202,15 +214,11 @@
   voiceReplyButton.type = "button";
   voiceReplyButton.disabled = true;
   voiceReplyButton.appendChild(speakerIcon());
-  const clearButton = createElement("button", "assistant-clear-button", "Clear");
-  clearButton.type = "button";
-  clearButton.setAttribute("aria-label", "Clear chat and start a new conversation");
-  clearButton.title = "Clear chat";
   const closeButton = createElement("button", "assistant-icon-button", "×");
   closeButton.type = "button";
   closeButton.setAttribute("aria-label", "Close assistant");
   closeButton.title = "Close";
-  headerActions.append(status, voiceReplyButton, clearButton, closeButton);
+  headerActions.append(voiceReplyButton, closeButton);
   header.append(identity, headerActions);
 
   const messages = createElement("div", "assistant-messages");
@@ -238,8 +246,11 @@
   sendButton.appendChild(sendIcon());
 
   composer.append(input, micButton, sendButton);
+  const responseAudio = createElement("audio", "assistant-response-audio");
+  responseAudio.preload = "auto";
+  responseAudio.setAttribute("playsinline", "");
   panel.append(header, messages, composer);
-  root.append(launcher, panel);
+  root.append(launcher, panel, responseAudio);
 
   let busy = false;
   let transcribing = false;
@@ -259,7 +270,8 @@
   let audioMonitorFrame = 0;
   let recordingTimeout = 0;
   let transcriptionController = null;
-  let responseAudio = null;
+  let audioUnlocked = false;
+  let audioUnlockPromise = null;
   let playbackTimeout = 0;
   let playbackGeneration = 0;
   const mediaCaptureSupported = Boolean(
@@ -316,6 +328,7 @@
     messages.appendChild(row);
     rememberMessage("assistant", text);
     scrollToLatest();
+    return row;
   }
 
   function addTypingIndicator() {
@@ -358,16 +371,38 @@
     window.clearTimeout(playbackTimeout);
     playbackTimeout = 0;
     voiceReplyButton.classList.remove("loading", "playing");
-    if (responseAudio) {
-      responseAudio.onplaying = null;
-      responseAudio.onended = null;
-      responseAudio.onerror = null;
-      responseAudio.pause();
-      responseAudio.removeAttribute("src");
-      responseAudio.load();
-      responseAudio = null;
-    }
+    responseAudio.onplaying = null;
+    responseAudio.onended = null;
+    responseAudio.onerror = null;
+    responseAudio.pause();
+    responseAudio.removeAttribute("src");
+    responseAudio.load();
     updateVoiceReplyButton();
+  }
+
+  function primeAudioPlayback() {
+    if (audioUnlocked) return Promise.resolve(true);
+    if (audioUnlockPromise) return audioUnlockPromise;
+
+    responseAudio.onplaying = null;
+    responseAudio.onended = null;
+    responseAudio.onerror = null;
+    responseAudio.src = SILENT_AUDIO_DATA_URI;
+    responseAudio.load();
+    audioUnlockPromise = Promise.resolve(responseAudio.play())
+      .then(() => {
+        responseAudio.pause();
+        responseAudio.currentTime = 0;
+        responseAudio.removeAttribute("src");
+        responseAudio.load();
+        audioUnlocked = true;
+        return true;
+      })
+      .catch(() => false)
+      .finally(() => {
+        audioUnlockPromise = null;
+      });
+    return audioUnlockPromise;
   }
 
   function setVoiceRepliesEnabled(enabled) {
@@ -384,7 +419,28 @@
     else updateVoiceReplyButton();
   }
 
-  async function playSpeech(speechId) {
+  function showPlaybackFallback(responseRow, speechId) {
+    if (!responseRow || !responseRow.isConnected) return;
+    let button = responseRow.querySelector(".assistant-play-reply");
+    if (button) {
+      button.disabled = false;
+      button.classList.remove("playing");
+      button.querySelector("span").textContent = "Play voice reply";
+      return;
+    }
+
+    button = createElement("button", "assistant-play-reply");
+    button.type = "button";
+    button.append(speakerIcon(), createElement("span", "", "Play voice reply"));
+    button.setAttribute("aria-label", "Play this voice reply");
+    button.addEventListener("click", () => {
+      void playSpeech(speechId, responseRow, button);
+    });
+    responseRow.appendChild(button);
+    scrollToLatest();
+  }
+
+  async function playSpeech(speechId, responseRow, playbackButton = null) {
     if (!voiceRepliesEnabled || typeof speechId !== "string") return;
     stopAudioPlayback();
     const generation = playbackGeneration;
@@ -392,8 +448,7 @@
       `${apiUrl}/api/speech/${encodeURIComponent(speechId)}`,
     );
     speechUrl.searchParams.set("sessionId", sessionId);
-    const player = new Audio();
-    responseAudio = player;
+    const player = responseAudio;
     voiceReplyButton.classList.add("loading");
     voiceReplyButton.title = "Preparing spoken reply";
     player.preload = "auto";
@@ -403,9 +458,20 @@
       if (generation !== playbackGeneration) return;
       window.clearTimeout(playbackTimeout);
       playbackTimeout = 0;
-      responseAudio = null;
       voiceReplyButton.classList.remove("loading", "playing");
+      if (playbackButton) {
+        playbackButton.disabled = false;
+        playbackButton.classList.remove("playing");
+        playbackButton.querySelector("span").textContent = "Play voice reply";
+      }
       updateVoiceReplyButton();
+    };
+    let failed = false;
+    const offerFallback = () => {
+      if (failed || generation !== playbackGeneration) return;
+      failed = true;
+      finish();
+      showPlaybackFallback(responseRow, speechId);
     };
     player.onplaying = () => {
       if (generation !== playbackGeneration) return;
@@ -414,40 +480,25 @@
       voiceReplyButton.classList.remove("loading");
       voiceReplyButton.classList.add("playing");
       voiceReplyButton.title = "Playing spoken reply";
+      if (playbackButton) {
+        playbackButton.disabled = true;
+        playbackButton.classList.add("playing");
+        playbackButton.querySelector("span").textContent = "Playing voice reply";
+      }
     };
     player.onended = finish;
-    player.onerror = finish;
+    player.onerror = offerFallback;
     playbackTimeout = window.setTimeout(() => {
       if (generation !== playbackGeneration) return;
-      stopAudioPlayback();
+      offerFallback();
     }, AUDIO_REQUEST_TIMEOUT_MS);
 
     try {
       player.load();
       await player.play();
     } catch (_error) {
-      finish();
+      offerFallback();
     }
-  }
-
-  function clearConversation() {
-    if (
-      busy ||
-      transcribing ||
-      capturePending ||
-      mediaRecorder?.state === "recording"
-    ) {
-      return;
-    }
-    stopAudioPlayback();
-    histories[workspace] = [];
-    storeHistories();
-    sessionId = createSessionId();
-    storeSessionId(sessionId);
-    input.value = "";
-    renderConversation();
-    resizeInput();
-    input.focus();
   }
 
   function resetRecordingControls() {
@@ -456,7 +507,6 @@
     micButton.setAttribute("aria-label", "Start voice input");
     micButton.title = "Voice input";
     micButton.disabled = busy || transcribing || voiceConfigured === false;
-    clearButton.disabled = busy || transcribing;
     workspaceSelect.disabled = busy || transcribing;
   }
 
@@ -570,7 +620,6 @@
     micButton.setAttribute("aria-label", "Processing voice input");
     micButton.title = "Processing voice input";
     micButton.disabled = true;
-    clearButton.disabled = true;
     workspaceSelect.disabled = true;
     const controller = new AbortController();
     transcriptionController = controller;
@@ -639,13 +688,11 @@
       return;
     }
 
-    stopAudioPlayback();
     discardRecording = false;
     recordingChunks = [];
     heardSpeech = false;
     lastVoiceActivityAt = 0;
     micButton.disabled = true;
-    clearButton.disabled = true;
     workspaceSelect.disabled = true;
     const requestedCaptureGeneration = ++captureGeneration;
     try {
@@ -790,9 +837,6 @@
       const payload = await response.json();
       const anythingLlmReady = payload?.anythingLlm === true;
       voiceConfigured = payload?.voice?.configured === true;
-      status.textContent = anythingLlmReady ? "Ready" : "Check setup";
-      status.classList.toggle("ready", anythingLlmReady);
-      status.classList.toggle("unavailable", !anythingLlmReady);
       launcher.classList.toggle("unavailable", !anythingLlmReady);
       micButton.disabled = busy || transcribing || !voiceConfigured;
       voiceReplyButton.disabled =
@@ -802,8 +846,6 @@
         : "Voice input needs setup";
     } catch (_error) {
       voiceConfigured = false;
-      status.textContent = "Offline";
-      status.classList.add("unavailable");
       launcher.classList.add("unavailable");
       micButton.disabled = true;
       voiceReplyButton.disabled = true;
@@ -821,7 +863,6 @@
     addMessage("user", message);
     input.value = "";
     busy = true;
-    clearButton.disabled = true;
     input.disabled = true;
     micButton.disabled = true;
     workspaceSelect.disabled = true;
@@ -858,9 +899,9 @@
         );
       }
       typing.remove();
-      addAnimatedResponse(payload.message);
+      const responseRow = addAnimatedResponse(payload.message);
       if (shouldSpeak && typeof payload.speechId === "string") {
-        void playSpeech(payload.speechId);
+        void playSpeech(payload.speechId, responseRow);
       }
     } catch (error) {
       typing.remove();
@@ -873,7 +914,6 @@
     } finally {
       window.clearTimeout(timeout);
       busy = false;
-      clearButton.disabled = false;
       input.disabled = false;
       micButton.disabled = transcribing || voiceConfigured === false;
       workspaceSelect.disabled = false;
@@ -890,14 +930,17 @@
   }
 
   voiceReplyButton.addEventListener("click", () => {
-    setVoiceRepliesEnabled(!voiceRepliesEnabled);
+    const enabling = !voiceRepliesEnabled;
+    setVoiceRepliesEnabled(enabling);
+    if (enabling) void primeAudioPlayback();
   });
   micButton.addEventListener("click", () => {
+    stopAudioPlayback();
+    if (voiceRepliesEnabled) void primeAudioPlayback();
     if (mediaRecorder?.state === "recording") stopRecording(false);
     else void startListening();
   });
   launcher.addEventListener("click", () => setOpen(true));
-  clearButton.addEventListener("click", clearConversation);
   closeButton.addEventListener("click", () => setOpen(false));
   workspaceSelect.addEventListener("change", () => {
     setWorkspace(workspaceSelect.value);
