@@ -31,12 +31,12 @@
   const SESSION_KEY_PREFIX = "assistant-chat-session:";
   const VOICE_REPLIES_KEY = "assistant-voice-replies-enabled";
   const REQUEST_TIMEOUT_MS = 35000;
-  const AUDIO_REQUEST_TIMEOUT_MS = 60000;
+  const AUDIO_REQUEST_TIMEOUT_MS = 210000;
   const SILENT_AUDIO_DATA_URI =
     "data:audio/wav;base64,UklGRiUAAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQEAAACA";
-  const MAX_RECORDING_MS = 45000;
-  const NO_SPEECH_TIMEOUT_MS = 8000;
-  const SILENCE_STOP_MS = 850;
+  const MAX_RECORDING_MS = 180000;
+  const NO_SPEECH_TIMEOUT_MS = 12000;
+  const SILENCE_STOP_MS = 2000;
   const VOICE_ACTIVITY_THRESHOLD = 0.024;
   const MESSAGE_KINDS = new Set(["user", "assistant", "error"]);
 
@@ -229,7 +229,7 @@
   const composer = createElement("form", "assistant-composer");
   const input = createElement("textarea", "assistant-input");
   input.rows = 1;
-  input.maxLength = 4000;
+  input.maxLength = 8000;
   input.setAttribute("aria-label", "Ask the knowledge assistant");
 
   const micButton = createElement("button", "assistant-action assistant-mic");

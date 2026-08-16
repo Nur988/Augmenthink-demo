@@ -1,7 +1,7 @@
 const { randomUUID } = require("node:crypto");
+const { once } = require("node:events");
 const path = require("node:path");
 const { Readable } = require("node:stream");
-const { pipeline } = require("node:stream/promises");
 
 const cors = require("cors");
 const dotenv = require("dotenv");
@@ -11,10 +11,11 @@ const { rateLimit } = require("express-rate-limit");
 dotenv.config();
 
 const DEFAULT_PORT = 3000;
-const MAX_MESSAGE_LENGTH = 4000;
+const MAX_MESSAGE_LENGTH = 8000;
+const MAX_TTS_CHUNK_LENGTH = 3500;
 const READINESS_TIMEOUT_MS = 5000;
 const UPSTREAM_TIMEOUT_MS = 30000;
-const OPENAI_AUDIO_TIMEOUT_MS = 45000;
+const OPENAI_AUDIO_TIMEOUT_MS = 180000;
 const SPEECH_CACHE_TTL_MS = 2 * 60 * 1000;
 const MAX_SPEECH_CACHE_ENTRIES = 200;
 
@@ -30,9 +31,9 @@ const AUDIO_FILE_EXTENSIONS = Object.freeze({
 });
 
 const WORKSPACES = Object.freeze({
-  clevart: "clevart",
-  augmenthink: "augmenthink",
-  raisewisely: "raisewisely",
+  clevart: "creart-digital-media",
+  augmenthink: "my-workspace",
+  raisewisely: "raise-wisely",
   mirrorxr: "mirrorxr",
 });
 
@@ -209,6 +210,39 @@ function formatSpeechText(input) {
   return formatDisplayText(input);
 }
 
+function splitSpeechText(input, maxLength = MAX_TTS_CHUNK_LENGTH) {
+  const text = formatSpeechText(input);
+  if (!text) return [];
+  if (text.length <= maxLength) return [text];
+
+  const chunks = [];
+  let remaining = text;
+  const minimumNaturalBreak = Math.floor(maxLength * 0.55);
+
+  while (remaining.length > maxLength) {
+    const candidate = remaining.slice(0, maxLength + 1);
+    const sentenceBreaks = Array.from(
+      candidate.matchAll(/[.!?](?:["')\]]*)\s+/g),
+      (match) => match.index + match[0].trimEnd().length,
+    );
+    const naturalBreaks = [
+      candidate.lastIndexOf("\n\n"),
+      sentenceBreaks.at(-1) || -1,
+      candidate.lastIndexOf("\n"),
+      candidate.lastIndexOf(" "),
+    ];
+    const splitAt =
+      naturalBreaks.find((position) => position >= minimumNaturalBreak) ||
+      maxLength;
+    const chunk = remaining.slice(0, splitAt).trim();
+    if (chunk) chunks.push(chunk);
+    remaining = remaining.slice(splitAt).trim();
+  }
+
+  if (remaining) chunks.push(remaining);
+  return chunks;
+}
+
 function createApp(options = {}) {
   const app = express();
   const anythingLlmUrl = (
@@ -313,7 +347,7 @@ function createApp(options = {}) {
     })(request, response, next);
   });
 
-  app.use(express.json({ limit: "16kb", strict: true }));
+  app.use(express.json({ limit: "32kb", strict: true }));
 
   app.get("/health", (_request, response) => {
     response.json({ status: "ok" });
@@ -521,7 +555,7 @@ function createApp(options = {}) {
   app.post(
     "/api/transcribe",
     voiceLimiter,
-    express.raw({ type: () => true, limit: "10mb" }),
+    express.raw({ type: () => true, limit: "24mb" }),
     async (request, response) => {
       if (!openAiApiKey) {
         response.status(503).json({
@@ -663,43 +697,41 @@ function createApp(options = {}) {
     response.once("close", abortOnDisconnect);
     const timeout = setTimeout(() => controller.abort(), OPENAI_AUDIO_TIMEOUT_MS);
     try {
-      const upstreamResponse = await fetchImpl(`${openAiBaseUrl}/audio/speech`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${openAiApiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({
-          model: openAiTtsModel,
-          voice: openAiTtsVoice,
-          input: speech.text,
-          instructions: openAiTtsInstructions,
-          speed: openAiTtsSpeed,
-          response_format: "mp3",
-        }),
-        signal: controller.signal,
-      });
-      if (!upstreamResponse.ok) {
-        console.error(`OpenAI speech returned HTTP ${upstreamResponse.status}.`);
-        response.status(502).json({
-          success: false,
-          error: "The spoken response could not be generated.",
+      const speechChunks = splitSpeechText(speech.text);
+      for (const input of speechChunks) {
+        const upstreamResponse = await fetchImpl(`${openAiBaseUrl}/audio/speech`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${openAiApiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({
+            model: openAiTtsModel,
+            voice: openAiTtsVoice,
+            input,
+            instructions: openAiTtsInstructions,
+            speed: openAiTtsSpeed,
+            response_format: "mp3",
+          }),
+          signal: controller.signal,
         });
-        return;
+        if (!upstreamResponse.ok) {
+          throw new Error(`OpenAI speech returned HTTP ${upstreamResponse.status}.`);
+        }
+        if (!upstreamResponse.body) {
+          throw new Error("The voice service returned an empty audio response.");
+        }
+        if (!response.headersSent) {
+          response.setHeader("Content-Type", "audio/mpeg");
+          response.setHeader("Cache-Control", "no-store");
+          response.setHeader("X-Accel-Buffering", "no");
+          response.flushHeaders();
+        }
+        for await (const audioChunk of Readable.fromWeb(upstreamResponse.body)) {
+          if (!response.write(audioChunk)) await once(response, "drain");
+        }
       }
-
-      if (!upstreamResponse.body) {
-        response.status(502).json({
-          success: false,
-          error: "The voice service returned an empty audio response.",
-        });
-        return;
-      }
-      response.setHeader("Content-Type", "audio/mpeg");
-      response.setHeader("Cache-Control", "no-store");
-      response.setHeader("X-Accel-Buffering", "no");
-      response.flushHeaders();
-      await pipeline(Readable.fromWeb(upstreamResponse.body), response);
+      response.end();
     } catch (error) {
       const timedOut = error?.name === "AbortError";
       console.error(
@@ -765,5 +797,6 @@ module.exports = {
   getAssistantMessage,
   getAssistantSources,
   getWorkspaceSlugs,
+  splitSpeechText,
   validateChatRequest,
 };

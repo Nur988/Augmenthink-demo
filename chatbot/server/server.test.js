@@ -8,6 +8,7 @@ const {
   formatDisplayText,
   formatSpeechText,
   getAssistantSources,
+  splitSpeechText,
 } = require("./server");
 
 async function startTestServer(options = {}) {
@@ -73,6 +74,9 @@ test("gateway serves a widget-only preview and widget assets", async (t) => {
   assert.match(widgetScript, /primeAudioPlayback/);
   assert.match(widgetScript, /SILENT_AUDIO_DATA_URI/);
   assert.match(widgetScript, /Play voice reply/);
+  assert.match(widgetScript, /MAX_RECORDING_MS = 180000/);
+  assert.match(widgetScript, /SILENCE_STOP_MS = 2000/);
+  assert.match(widgetScript, /input\.maxLength = 8000/);
   assert.doesNotMatch(widgetScript, /const player = new Audio/);
   assert.match(widgetScript, /await sendMessage\(\{ fromVoice: true \}\)/);
   assert.doesNotMatch(widgetScript, /assistant-mode-switch|assistant:set-mode/);
@@ -96,8 +100,10 @@ test("gateway serves a widget-only preview and widget assets", async (t) => {
 
 test("readiness confirms API access and required workspaces", async (t) => {
   const gateway = await startTestServer({
+    anythingLlmUrl: "http://localhost:3001",
     anythingLlmApiKey: "test-key",
     openAiApiKey: "test-openai-key",
+    openAiTtsVoice: "cedar",
     fetchImpl: async (url, options) => {
       assert.equal(url, "http://localhost:3001/api/v1/workspaces");
       assert.equal(options.headers.Authorization, "Bearer test-key");
@@ -105,9 +111,9 @@ test("readiness confirms API access and required workspaces", async (t) => {
         JSON.stringify({
           workspaces: [
             { slug: "mirrorxr" },
-            { slug: "augmenthink" },
-            { slug: "clevart" },
-            { slug: "raisewisely" },
+            { slug: "my-workspace" },
+            { slug: "creart-digital-media" },
+            { slug: "raise-wisely" },
           ],
         }),
         { status: 200, headers: { "Content-Type": "application/json" } },
@@ -331,6 +337,18 @@ console.log("not spoken");
   assert.doesNotMatch(formatted, /```|\]\(/);
 });
 
+test("long spoken responses are split at natural API-safe boundaries", () => {
+  const source = Array.from(
+    { length: 80 },
+    (_, index) => `Sentence ${index + 1} explains a useful next step clearly.`,
+  ).join(" ");
+  const chunks = splitSpeechText(source, 180);
+
+  assert.ok(chunks.length > 1);
+  assert.ok(chunks.every((chunk) => chunk.length <= 180));
+  assert.equal(chunks.join(" "), formatSpeechText(source));
+});
+
 test("display formatter removes Markdown artifacts without truncating content", () => {
   const longTail = "Complete ending ".repeat(400);
   const formatted = formatDisplayText(
@@ -406,6 +424,10 @@ test("speech endpoint streams cached speech-safe text as audio", async (t) => {
     anythingLlmApiKey: "anything-server-secret",
     openAiApiKey: "openai-server-secret",
     openAiBaseUrl: "https://openai.test/v1",
+    openAiTtsVoice: "cedar",
+    openAiTtsSpeed: 1.2,
+    openAiTtsInstructions:
+      "Speak in British English (en-GB) with a +1.6 pitch adjustment.",
     fetchImpl: async (url, options) => {
       if (url.includes("/api/v1/workspace/")) {
         return new Response(

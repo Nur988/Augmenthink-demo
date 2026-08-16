@@ -86,7 +86,7 @@ Do not commit `server/.env`. If Webflow uses a custom production domain, set tha
 ## AnythingLLM setup
 
 1. Configure OpenAI as the LLM provider inside AnythingLLM. Keep the OpenAI key there.
-2. Create workspaces whose slugs match the server mappings: `clevart`, `augmenthink`, `raisewisely`, and `mirrorxr`. The existing `clevart` slug is displayed to visitors as **Creart Digital Media**.
+2. Create workspaces whose slugs match the server mappings: `creart-digital-media`, `my-workspace`, `raise-wisely`, and `mirrorxr`. Their public widget keys remain `clevart`, `augmenthink`, `raisewisely`, and `mirrorxr`.
 3. Add the documents and system prompt appropriate to each workspace.
 4. In AnythingLLM, open **Settings > Developer API**, create an API key, and put it only in `server/.env` as `ANYTHINGLLM_API_KEY`.
 5. Keep AnythingLLM reachable privately at the value of `ANYTHINGLLM_URL`. Do not create a public tunnel to port 3001.
@@ -144,7 +144,7 @@ Browser MediaRecorder + silence detection
   -> audio playback in the browser
 ```
 
-The display formatter removes Markdown artifacts while preserving the full answer, including plain-text code content. The UI includes microphone permission handling, automatic silence stop, a 45-second recording ceiling, request timeouts, tap-to-stop controls, visible loading/playback states on the speaker button, mobile audio unlocking, and an explicit playback fallback when autoplay is restricted. Chat messages, session IDs, and the spoken-reply preference are stored in browser local storage.
+The display formatter removes Markdown artifacts while preserving the full answer, including plain-text code content. The UI includes microphone permission handling, automatic silence stop after a natural two-second pause, a three-minute recording ceiling, request timeouts, tap-to-stop controls, visible loading/playback states on the speaker button, mobile audio unlocking, and an explicit playback fallback when autoplay is restricted. Long spoken replies are split into API-safe chunks and played as one response. Chat messages, session IDs, and the spoken-reply preference are stored in browser local storage.
 
 ## API behavior
 
@@ -180,7 +180,7 @@ Successful responses are normalized to:
 
 `POST /api/transcribe?workspace=augmenthink` accepts a raw `audio/webm`, `audio/mp4`, `audio/mpeg`, `audio/ogg`, or `audio/wav` body and returns `{ "success": true, "text": "..." }`. It sends the selected workspace name and portfolio vocabulary as transcription context. `GET /api/speech/:speechId?sessionId=...` streams `audio/mpeg`; speech IDs expire after two minutes and are bound to the originating browser session.
 
-The gateway limits JSON bodies to 16 KB, recordings to 10 MB, messages to 4,000 characters, and each client IP to 60 chat requests or 40 voice requests per 15 minutes. AnythingLLM requests time out after 30 seconds and OpenAI audio requests after 45 seconds.
+The gateway limits JSON bodies to 32 KB, recordings to 24 MB, messages to 8,000 characters, and each client IP to 60 chat requests or 40 voice requests per 15 minutes. AnythingLLM requests time out after 30 seconds and OpenAI audio requests after three minutes.
 
 ## Tests
 
