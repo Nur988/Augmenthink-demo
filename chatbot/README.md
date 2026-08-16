@@ -56,15 +56,15 @@ The script injects a Shadow DOM widget, derives the gateway URL from its own scr
 The embedded widget provides:
 
 - An empty conversation area ready for the visitor's first question.
-- Workspace switching for MirrorXR, Augmenthink, and Clevart.
+- Workspace switching for Creart Digital Media, Augmenthink, RaiseWisely, and Mirror XR.
 - One chat interface for typed and microphone input, with every turn displayed as text.
 - AnythingLLM agent mode for every message, including web search when the Web Browsing agent skill is enabled.
-- Browser-persistent chat history for each workspace that remains until the visitor selects Clear.
+- Browser-persistent chat history for each workspace across visits.
 - A microphone button with accurate transcription, silence detection, and automatic submission.
-- A top-right speaker button that enables spoken assistant replies for microphone-origin messages and remembers the visitor's choice.
+- A top-right speaker button that enables spoken assistant replies for microphone-origin messages, remembers the visitor's choice, and unlocks playback during a direct tap for mobile browsers.
+- An inline Play voice reply fallback when a phone blocks automatic audio playback.
 - A responsive full-screen mobile layout with safe-area spacing, touch-friendly controls, and keyboard-aware composer sizing.
-- A live readiness indicator backed by `GET /api/readiness`.
-- A clear-chat control that starts a fresh browser and AnythingLLM session.
+- A background readiness check backed by `GET /api/readiness`.
 
 ## Environment variables
 
@@ -86,7 +86,7 @@ Do not commit `server/.env`. If Webflow uses a custom production domain, set tha
 ## AnythingLLM setup
 
 1. Configure OpenAI as the LLM provider inside AnythingLLM. Keep the OpenAI key there.
-2. Create workspaces whose slugs match the server mappings: `mirrorxr`, `augmenthink`, and `clevart`.
+2. Create workspaces whose slugs match the server mappings: `clevart`, `augmenthink`, `raisewisely`, and `mirrorxr`. The existing `clevart` slug is displayed to visitors as **Creart Digital Media**.
 3. Add the documents and system prompt appropriate to each workspace.
 4. In AnythingLLM, open **Settings > Developer API**, create an API key, and put it only in `server/.env` as `ANYTHINGLLM_API_KEY`.
 5. Keep AnythingLLM reachable privately at the value of `ANYTHINGLLM_URL`. Do not create a public tunnel to port 3001.
@@ -114,7 +114,7 @@ Add this exact shape in Webflow **Site settings > Custom code > Footer code**, o
 
 ```html
 <script
-  src="https://YOUR-GATEWAY.onrender.com/chat-widget.js?v=1"
+  src="https://YOUR-GATEWAY.onrender.com/chat-widget.js"
   data-api-url="https://YOUR-GATEWAY.onrender.com"
   data-workspace="augmenthink">
 </script>
@@ -122,7 +122,9 @@ Add this exact shape in Webflow **Site settings > Custom code > Footer code**, o
 
 Replace both hostnames with the same Render gateway hostname. Add the script in **Site settings > Custom code > Footer code** to show it throughout the site, or in a page's **Before `</body>`** code to limit it to one page. Publish the Webflow site before testing; the Designer canvas is not the production origin.
 
-Set `data-workspace` to one of the public keys `mirrorxr`, `augmenthink`, or `clevart`. Omit it to use `augmenthink`.
+The gateway marks the widget JavaScript, stylesheet, and logo as non-cacheable and gives dependent assets a fresh query key on every page load. Normal reloads therefore pick up UI changes without manually changing a version number or performing a hard reload.
+
+Set `data-workspace` to one of the public keys `clevart`, `augmenthink`, `raisewisely`, or `mirrorxr`. Omit it to use `augmenthink`.
 
 Visitors can type and send normally or tap the microphone button to record a bounded utterance. Microphone input stops after silence (or another tap), is transcribed with OpenAI, and is submitted automatically. The transcript and the assistant's response both appear as normal text messages in the same chat window. When the top-right speaker button is enabled, responses to microphone input are also played aloud; typed messages remain text-only.
 
@@ -142,7 +144,7 @@ Browser MediaRecorder + silence detection
   -> audio playback in the browser
 ```
 
-The display formatter removes Markdown artifacts while preserving the full answer, including plain-text code content. The UI includes microphone permission handling, automatic silence stop, a 45-second recording ceiling, request timeouts, tap-to-stop controls, and visible loading/playback states on the speaker button. Chat messages, session IDs, and the spoken-reply preference are stored in browser local storage; selecting Clear removes the visible history and starts a new AnythingLLM session for that workspace.
+The display formatter removes Markdown artifacts while preserving the full answer, including plain-text code content. The UI includes microphone permission handling, automatic silence stop, a 45-second recording ceiling, request timeouts, tap-to-stop controls, visible loading/playback states on the speaker button, mobile audio unlocking, and an explicit playback fallback when autoplay is restricted. Chat messages, session IDs, and the spoken-reply preference are stored in browser local storage.
 
 ## API behavior
 
@@ -174,7 +176,7 @@ Successful responses are normalized to:
 }
 ```
 
-`GET /api/readiness` verifies that the AnythingLLM key works, confirms all three mapped workspaces are available, and reports whether the server-only OpenAI voice key is configured. It does not make a billable OpenAI request. It returns HTTP 200 when the complete chat-and-voice gateway is ready and HTTP 503 when configuration needs attention.
+`GET /api/readiness` verifies that the AnythingLLM key works, confirms all four mapped workspaces are available, and reports whether the server-only OpenAI voice key is configured. It does not make a billable OpenAI request. It returns HTTP 200 when the complete chat-and-voice gateway is ready and HTTP 503 when configuration needs attention.
 
 `POST /api/transcribe?workspace=augmenthink` accepts a raw `audio/webm`, `audio/mp4`, `audio/mpeg`, `audio/ogg`, or `audio/wav` body and returns `{ "success": true, "text": "..." }`. It sends the selected workspace name and portfolio vocabulary as transcription context. `GET /api/speech/:speechId?sessionId=...` streams `audio/mpeg`; speech IDs expire after two minutes and are bound to the originating browser session.
 
@@ -193,7 +195,7 @@ The tests cover health, invalid input, arbitrary workspace rejection, CORS, work
 
 ## MVP limitations
 
-- Visible chat history and AnythingLLM session IDs are retained per workspace in browser local storage until the visitor selects Clear or clears browser storage.
+- Visible chat history and AnythingLLM session IDs are retained per workspace until the visitor clears browser storage.
 - `localStorage` sessions are browser- and origin-specific and can be cleared by the user.
 - Transcription is file-based rather than token-streaming, so the transcript is sent and displayed after silence is detected or the user taps stop.
 - File transcription starts after silence is detected; the OpenAI Realtime API would be the next step if live partial transcripts become a requirement.
