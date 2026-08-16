@@ -12,33 +12,26 @@
   script.dataset.assistantWidgetLoaded = "true";
 
   const WORKSPACES = Object.freeze({
-    mirrorxr: {
-      label: "MirrorXR",
-    },
-    augmenthink: {
-      label: "Augmenthink",
-    },
-    clevart: {
-      label: "Clevart",
-    },
+    mirrorxr: { label: "MirrorXR" },
+    augmenthink: { label: "Augmenthink" },
+    clevart: { label: "Clevart" },
   });
-
   const configuredWorkspace = script.dataset.workspace || "augmenthink";
   let workspace = WORKSPACES[configuredWorkspace]
     ? configuredWorkspace
     : "augmenthink";
   const scriptUrl = new URL(script.src, window.location.href);
-  const apiUrl = (
-    script.dataset.apiUrl || scriptUrl.origin
-  ).replace(/\/$/, "");
-  const submitSpeech = script.dataset.submitSpeech === "true";
-  const SESSION_KEY = "assistant-chat-session";
+  const apiUrl = (script.dataset.apiUrl || scriptUrl.origin).replace(/\/$/, "");
+  const HISTORY_KEY = "assistant-chat-history-v1";
+  const SESSION_KEY_PREFIX = "assistant-chat-session:";
+  const VOICE_REPLIES_KEY = "assistant-voice-replies-enabled";
   const REQUEST_TIMEOUT_MS = 35000;
   const AUDIO_REQUEST_TIMEOUT_MS = 60000;
   const MAX_RECORDING_MS = 45000;
   const NO_SPEECH_TIMEOUT_MS = 8000;
   const SILENCE_STOP_MS = 850;
   const VOICE_ACTIVITY_THRESHOLD = 0.024;
+  const MESSAGE_KINDS = new Set(["user", "assistant", "error"]);
 
   function createElement(tagName, className, text) {
     const element = document.createElement(tagName);
@@ -47,6 +40,37 @@
     return element;
   }
 
+  function createIcon(pathData) {
+    const namespace = "http://www.w3.org/2000/svg";
+    const icon = document.createElementNS(namespace, "svg");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("aria-hidden", "true");
+    icon.setAttribute("focusable", "false");
+    const path = document.createElementNS(namespace, "path");
+    path.setAttribute("d", pathData);
+    icon.appendChild(path);
+    return icon;
+  }
+
+  const microphoneIcon = () =>
+    createIcon(
+      "M12 14a3 3 0 0 0 3-3V5a3 3 0 0 0-6 0v6a3 3 0 0 0 3 3Zm5-3a5 5 0 0 1-10 0H5a7 7 0 0 0 6 6.92V21H8v2h8v-2h-3v-3.08A7 7 0 0 0 19 11h-2Z",
+    );
+  const voiceActivityIcon = () => {
+    const indicator = createElement("span", "assistant-voice-indicator");
+    indicator.setAttribute("aria-hidden", "true");
+    for (let index = 0; index < 4; index += 1) {
+      indicator.appendChild(createElement("i"));
+    }
+    return indicator;
+  };
+  const sendIcon = () =>
+    createIcon("M11 20V7.83l-4.59 4.58L5 11l7-7 7 7-1.41 1.41L13 7.83V20h-2Z");
+  const speakerIcon = () =>
+    createIcon(
+      "M3 9v6h4l5 5V4L7 9H3Zm11-1.03v8.05A4.49 4.49 0 0 0 16.5 12 4.49 4.49 0 0 0 14 7.97Zm0-4.74v2.06A7 7 0 0 1 19 12a7 7 0 0 1-5 6.71v2.06A9 9 0 0 0 21 12a9 9 0 0 0-7-8.77Z",
+    );
+
   function createSessionId() {
     return (
       window.crypto?.randomUUID?.() ||
@@ -54,20 +78,26 @@
     );
   }
 
-  function storeSessionId(sessionId) {
+  function sessionStorageKey(workspaceName) {
+    return `${SESSION_KEY_PREFIX}${workspaceName}`;
+  }
+
+  function storeSessionId(sessionId, workspaceName = workspace) {
     try {
-      window.localStorage.setItem(SESSION_KEY, sessionId);
+      window.localStorage.setItem(sessionStorageKey(workspaceName), sessionId);
     } catch (_error) {
       // The in-memory session still works when storage is unavailable.
     }
   }
 
-  function getSessionId() {
+  function getSessionId(workspaceName = workspace) {
     try {
-      let sessionId = window.localStorage.getItem(SESSION_KEY);
+      let sessionId = window.localStorage.getItem(
+        sessionStorageKey(workspaceName),
+      );
       if (!sessionId || !/^[A-Za-z0-9._:-]{1,128}$/.test(sessionId)) {
         sessionId = createSessionId();
-        storeSessionId(sessionId);
+        storeSessionId(sessionId, workspaceName);
       }
       return sessionId;
     } catch (_error) {
@@ -75,7 +105,51 @@
     }
   }
 
+  function loadHistories() {
+    const result = Object.fromEntries(
+      Object.keys(WORKSPACES).map((key) => [key, []]),
+    );
+    try {
+      const stored = JSON.parse(window.localStorage.getItem(HISTORY_KEY) || "{}");
+      Object.keys(WORKSPACES).forEach((key) => {
+        if (!Array.isArray(stored[key])) return;
+        result[key] = stored[key].filter(
+          (entry) =>
+            entry &&
+            MESSAGE_KINDS.has(entry.kind) &&
+            typeof entry.text === "string" &&
+            entry.text.length > 0,
+        );
+      });
+    } catch (_error) {
+      // Start empty if stored data is unavailable.
+    }
+    return result;
+  }
+
+  let histories = loadHistories();
   let sessionId = getSessionId();
+  let voiceRepliesEnabled = false;
+  try {
+    voiceRepliesEnabled =
+      window.localStorage.getItem(VOICE_REPLIES_KEY) === "true";
+  } catch (_error) {
+    // Voice replies remain off when storage is unavailable.
+  }
+
+  function storeHistories() {
+    try {
+      window.localStorage.setItem(HISTORY_KEY, JSON.stringify(histories));
+    } catch (_error) {
+      // The current page still retains its full in-memory conversation.
+    }
+  }
+
+  function rememberMessage(kind, text) {
+    histories[workspace].push({ kind, text });
+    storeHistories();
+  }
+
   const host = createElement("div");
   host.id = "assistant-chat-widget";
   document.body.appendChild(host);
@@ -121,6 +195,13 @@
   const headerActions = createElement("div", "assistant-header-actions");
   const status = createElement("span", "assistant-status", "Checking");
   status.setAttribute("role", "status");
+  const voiceReplyButton = createElement(
+    "button",
+    "assistant-header-voice",
+  );
+  voiceReplyButton.type = "button";
+  voiceReplyButton.disabled = true;
+  voiceReplyButton.appendChild(speakerIcon());
   const clearButton = createElement("button", "assistant-clear-button", "Clear");
   clearButton.type = "button";
   clearButton.setAttribute("aria-label", "Clear chat and start a new conversation");
@@ -129,88 +210,13 @@
   closeButton.type = "button";
   closeButton.setAttribute("aria-label", "Close assistant");
   closeButton.title = "Close";
-  headerActions.append(status, clearButton, closeButton);
+  headerActions.append(status, voiceReplyButton, clearButton, closeButton);
   header.append(identity, headerActions);
-
-  const modeSwitch = createElement("div", "assistant-mode-switch");
-  modeSwitch.setAttribute("role", "tablist");
-  modeSwitch.setAttribute("aria-label", "Interaction mode");
-  const chatModeButton = createElement(
-    "button",
-    "assistant-mode-option active",
-    "Chat",
-  );
-  chatModeButton.type = "button";
-  chatModeButton.setAttribute("role", "tab");
-  chatModeButton.setAttribute("aria-selected", "true");
-  const voiceModeButton = createElement(
-    "button",
-    "assistant-mode-option",
-    "Voice",
-  );
-  voiceModeButton.type = "button";
-  voiceModeButton.setAttribute("role", "tab");
-  voiceModeButton.setAttribute("aria-selected", "false");
-  modeSwitch.append(chatModeButton, voiceModeButton);
 
   const messages = createElement("div", "assistant-messages");
   messages.setAttribute("role", "log");
   messages.setAttribute("aria-live", "polite");
   messages.setAttribute("aria-relevant", "additions");
-
-  const voiceStage = createElement("section", "assistant-voice-stage");
-  voiceStage.setAttribute("aria-label", "Voice conversation");
-  voiceStage.dataset.state = "idle";
-  const voiceContext = createElement(
-    "p",
-    "assistant-voice-context",
-    `Voice conversation with ${WORKSPACES[workspace].label}`,
-  );
-  const voiceOrbButton = createElement("button", "assistant-voice-orb");
-  voiceOrbButton.type = "button";
-  voiceOrbButton.setAttribute("aria-label", "Start voice conversation");
-  const voiceOrbCore = createElement("span", "assistant-voice-orb-core");
-  const voiceWave = createElement("span", "assistant-voice-wave");
-  for (let index = 0; index < 5; index += 1) {
-    voiceWave.appendChild(createElement("i"));
-  }
-  voiceOrbCore.appendChild(voiceWave);
-  voiceOrbButton.appendChild(voiceOrbCore);
-  const voiceStateLabel = createElement(
-    "p",
-    "assistant-voice-state-label",
-    "Tap to start",
-  );
-  voiceStateLabel.setAttribute("role", "status");
-  const voiceHint = createElement(
-    "p",
-    "assistant-voice-hint",
-    "AI-generated voice · tap the orb to interrupt",
-  );
-  const voiceTurns = createElement("div", "assistant-voice-turns");
-  const voiceUserTurn = createElement("div", "assistant-voice-turn user hidden");
-  voiceUserTurn.append(
-    createElement("span", "assistant-voice-turn-label", "You"),
-  );
-  const voiceUserText = createElement("p", "assistant-voice-turn-text");
-  voiceUserTurn.appendChild(voiceUserText);
-  const voiceAgentTurn = createElement(
-    "div",
-    "assistant-voice-turn assistant hidden",
-  );
-  voiceAgentTurn.append(
-    createElement("span", "assistant-voice-turn-label", "Assistant"),
-  );
-  const voiceAgentText = createElement("p", "assistant-voice-turn-text");
-  voiceAgentTurn.appendChild(voiceAgentText);
-  voiceTurns.append(voiceUserTurn, voiceAgentTurn);
-  voiceStage.append(
-    voiceContext,
-    voiceOrbButton,
-    voiceStateLabel,
-    voiceHint,
-    voiceTurns,
-  );
 
   const composer = createElement("form", "assistant-composer");
   const input = createElement("textarea", "assistant-input");
@@ -218,26 +224,25 @@
   input.maxLength = 4000;
   input.setAttribute("aria-label", "Ask the knowledge assistant");
 
-  const micButton = createElement("button", "assistant-action assistant-mic", "Mic");
+  const micButton = createElement("button", "assistant-action assistant-mic");
   micButton.type = "button";
   micButton.setAttribute("aria-label", "Start voice input");
   micButton.title = "Voice input";
+  micButton.appendChild(microphoneIcon());
 
-  const sendButton = createElement("button", "assistant-action assistant-send", "↑");
+  const sendButton = createElement("button", "assistant-action assistant-send");
   sendButton.type = "submit";
   sendButton.setAttribute("aria-label", "Send message");
   sendButton.title = "Send";
   sendButton.disabled = true;
+  sendButton.appendChild(sendIcon());
 
   composer.append(input, micButton, sendButton);
-  panel.append(header, modeSwitch, messages, voiceStage, composer);
+  panel.append(header, messages, composer);
   root.append(launcher, panel);
 
   let busy = false;
   let transcribing = false;
-  let interactionMode = "chat";
-  let voiceSessionActive = false;
-  let voiceState = "idle";
   let voiceConfigured = null;
   let capturePending = false;
   let captureGeneration = 0;
@@ -245,7 +250,6 @@
   let mediaStream = null;
   let recordingChunks = [];
   let recordingMimeType = "";
-  let recordingRequestMode = "chat";
   let discardRecording = false;
   let recordingStartedAt = 0;
   let heardSpeech = false;
@@ -266,11 +270,12 @@
     messages.scrollTop = messages.scrollHeight;
   }
 
-  function addMessage(kind, text) {
+  function addMessage(kind, text, options = {}) {
     const row = createElement("div", `assistant-message-row ${kind}`);
     const bubble = createElement("div", "assistant-message", text);
     row.appendChild(bubble);
     messages.appendChild(row);
+    if (options.persist !== false) rememberMessage(kind, text);
     scrollToLatest();
     return row;
   }
@@ -284,7 +289,6 @@
         container.appendChild(document.createTextNode(part));
         return;
       }
-
       const word = createElement("span", "assistant-response-word", part);
       word.setAttribute("aria-hidden", "true");
       word.style.setProperty(
@@ -294,42 +298,24 @@
       wordIndex += 1;
       container.appendChild(word);
     });
-    return wordIndex;
   }
 
-  function addAnimatedResponse(text, options = {}) {
-    const deferred = options.deferred === true;
+  function addAnimatedResponse(text) {
     const reducedMotion = window.matchMedia(
       "(prefers-reduced-motion: reduce)",
     ).matches;
-
     const row = createElement(
       "div",
       `assistant-message-row assistant response-enter${
-        deferred ? " response-deferred" : ""
-      }${reducedMotion ? " response-reduced-motion" : ""}`,
+        reducedMotion ? " response-reduced-motion" : ""
+      }`,
     );
     const bubble = createElement("div", "assistant-message assistant-response");
     appendWordReveal(bubble, text);
-
     row.appendChild(bubble);
     messages.appendChild(row);
+    rememberMessage("assistant", text);
     scrollToLatest();
-    return {
-      row,
-      startReveal() {
-        row.classList.remove("response-deferred");
-        scrollToLatest();
-      },
-    };
-  }
-
-  function renderVoiceResponse(text, deferred = false) {
-    voiceAgentText.replaceChildren();
-    voiceAgentText.classList.toggle("response-deferred", deferred);
-    appendWordReveal(voiceAgentText, text, 20);
-    voiceAgentTurn.classList.remove("hidden");
-    return () => voiceAgentText.classList.remove("response-deferred");
   }
 
   function addTypingIndicator() {
@@ -345,54 +331,133 @@
     return row;
   }
 
-  function resetConversation() {
+  function renderConversation() {
     messages.replaceChildren();
-    input.placeholder = `Ask ${WORKSPACES[workspace].label}…`;
-    voiceContext.textContent = `Voice conversation with ${WORKSPACES[workspace].label}`;
-    voiceUserText.textContent = "";
-    voiceAgentText.textContent = "";
-    voiceUserTurn.classList.add("hidden");
-    voiceAgentTurn.classList.add("hidden");
+    input.placeholder = `Message ${WORKSPACES[workspace].label}…`;
+    histories[workspace].forEach(({ kind, text }) => {
+      addMessage(kind, text, { persist: false });
+    });
     scrollToLatest();
   }
 
+  function updateVoiceReplyButton() {
+    voiceReplyButton.classList.toggle("active", voiceRepliesEnabled);
+    voiceReplyButton.setAttribute(
+      "aria-pressed",
+      String(voiceRepliesEnabled),
+    );
+    const label = voiceRepliesEnabled
+      ? "Turn off spoken replies for voice input"
+      : "Turn on spoken replies for voice input";
+    voiceReplyButton.setAttribute("aria-label", label);
+    voiceReplyButton.title = label;
+  }
+
+  function stopAudioPlayback() {
+    playbackGeneration += 1;
+    window.clearTimeout(playbackTimeout);
+    playbackTimeout = 0;
+    voiceReplyButton.classList.remove("loading", "playing");
+    if (responseAudio) {
+      responseAudio.onplaying = null;
+      responseAudio.onended = null;
+      responseAudio.onerror = null;
+      responseAudio.pause();
+      responseAudio.removeAttribute("src");
+      responseAudio.load();
+      responseAudio = null;
+    }
+    updateVoiceReplyButton();
+  }
+
+  function setVoiceRepliesEnabled(enabled) {
+    voiceRepliesEnabled = Boolean(enabled);
+    try {
+      window.localStorage.setItem(
+        VOICE_REPLIES_KEY,
+        String(voiceRepliesEnabled),
+      );
+    } catch (_error) {
+      // The toggle still works for the current page.
+    }
+    if (!voiceRepliesEnabled) stopAudioPlayback();
+    else updateVoiceReplyButton();
+  }
+
+  async function playSpeech(speechId) {
+    if (!voiceRepliesEnabled || typeof speechId !== "string") return;
+    stopAudioPlayback();
+    const generation = playbackGeneration;
+    const speechUrl = new URL(
+      `${apiUrl}/api/speech/${encodeURIComponent(speechId)}`,
+    );
+    speechUrl.searchParams.set("sessionId", sessionId);
+    const player = new Audio();
+    responseAudio = player;
+    voiceReplyButton.classList.add("loading");
+    voiceReplyButton.title = "Preparing spoken reply";
+    player.preload = "auto";
+    player.src = speechUrl.href;
+
+    const finish = () => {
+      if (generation !== playbackGeneration) return;
+      window.clearTimeout(playbackTimeout);
+      playbackTimeout = 0;
+      responseAudio = null;
+      voiceReplyButton.classList.remove("loading", "playing");
+      updateVoiceReplyButton();
+    };
+    player.onplaying = () => {
+      if (generation !== playbackGeneration) return;
+      window.clearTimeout(playbackTimeout);
+      playbackTimeout = 0;
+      voiceReplyButton.classList.remove("loading");
+      voiceReplyButton.classList.add("playing");
+      voiceReplyButton.title = "Playing spoken reply";
+    };
+    player.onended = finish;
+    player.onerror = finish;
+    playbackTimeout = window.setTimeout(() => {
+      if (generation !== playbackGeneration) return;
+      stopAudioPlayback();
+    }, AUDIO_REQUEST_TIMEOUT_MS);
+
+    try {
+      player.load();
+      await player.play();
+    } catch (_error) {
+      finish();
+    }
+  }
+
   function clearConversation() {
-    if (busy || transcribing || capturePending) return;
-    stopVoiceSession();
+    if (
+      busy ||
+      transcribing ||
+      capturePending ||
+      mediaRecorder?.state === "recording"
+    ) {
+      return;
+    }
+    stopAudioPlayback();
+    histories[workspace] = [];
+    storeHistories();
     sessionId = createSessionId();
     storeSessionId(sessionId);
     input.value = "";
-    resetConversation();
+    renderConversation();
     resizeInput();
-    if (interactionMode === "voice") voiceOrbButton.focus();
-    else input.focus();
-  }
-
-  function updateVoiceState(nextState, label) {
-    const labels = {
-      idle: "Tap to talk",
-      listening: "I’m listening…",
-      thinking: "Thinking…",
-      speaking: "Speaking…",
-      unavailable: "Voice unavailable",
-    };
-    voiceState = nextState;
-    voiceStage.dataset.state = nextState;
-    voiceStateLabel.textContent = label || labels[nextState] || labels.idle;
-    voiceOrbButton.setAttribute(
-      "aria-label",
-      nextState === "listening"
-        ? "Stop listening"
-        : nextState === "speaking"
-          ? "Interrupt assistant and speak"
-          : "Start voice conversation",
-    );
+    input.focus();
   }
 
   function resetRecordingControls() {
-    micButton.classList.remove("listening");
-    micButton.textContent = "Mic";
+    micButton.classList.remove("listening", "processing");
+    micButton.replaceChildren(microphoneIcon());
     micButton.setAttribute("aria-label", "Start voice input");
+    micButton.title = "Voice input";
+    micButton.disabled = busy || transcribing || voiceConfigured === false;
+    clearButton.disabled = busy || transcribing;
+    workspaceSelect.disabled = busy || transcribing;
   }
 
   function stopCaptureAnalysis() {
@@ -414,69 +479,24 @@
     mediaStream = null;
   }
 
-  function cleanupCaptureResources({ releaseStream = true } = {}) {
+  function cleanupCaptureResources() {
     stopCaptureAnalysis();
-    if (releaseStream) releaseMediaStream();
+    releaseMediaStream();
   }
 
-  function stopRecording(shouldDiscard = false, options = {}) {
+  function stopRecording(shouldDiscard = false) {
     discardRecording ||= shouldDiscard;
-    if (mediaRecorder?.state === "recording") {
-      mediaRecorder.stop();
-    }
+    if (mediaRecorder?.state === "recording") mediaRecorder.stop();
     stopCaptureAnalysis();
-    if (options.releaseStream) releaseMediaStream();
   }
 
-  function stopAudioPlayback() {
-    playbackGeneration += 1;
-    window.clearTimeout(playbackTimeout);
-    playbackTimeout = 0;
-    if (responseAudio) {
-      responseAudio.onplaying = null;
-      responseAudio.onended = null;
-      responseAudio.onerror = null;
-      responseAudio.pause();
-      responseAudio.removeAttribute("src");
-      responseAudio.load();
-      responseAudio = null;
-    }
-  }
-
-  function stopVoiceSession() {
-    voiceSessionActive = false;
+  function cancelVoiceInput() {
     captureGeneration += 1;
-    stopRecording(true, { releaseStream: true });
+    stopRecording(true);
     transcriptionController?.abort();
     transcriptionController = null;
-    stopAudioPlayback();
-    updateVoiceState("idle");
-  }
-
-  function setInteractionMode(nextMode) {
-    if (!["chat", "voice"].includes(nextMode)) return;
-    if (nextMode === "voice" && !mediaCaptureSupported) {
-      updateVoiceState("unavailable", "Voice is not supported in this browser");
-      return;
-    }
-    if (nextMode === "voice" && voiceConfigured === false) {
-      updateVoiceState("unavailable", "Voice mode needs setup");
-      return;
-    }
-
-    interactionMode = nextMode;
-    const voiceMode = interactionMode === "voice";
-    panel.classList.toggle("voice-mode", voiceMode);
-    chatModeButton.classList.toggle("active", !voiceMode);
-    voiceModeButton.classList.toggle("active", voiceMode);
-    chatModeButton.setAttribute("aria-selected", String(!voiceMode));
-    voiceModeButton.setAttribute("aria-selected", String(voiceMode));
-    if (voiceMode) {
-      voiceOrbButton.focus();
-    } else {
-      stopVoiceSession();
-      input.focus();
-    }
+    cleanupCaptureResources();
+    resetRecordingControls();
   }
 
   function selectedRecordingMimeType() {
@@ -504,9 +524,12 @@
       audioAnalyser.fftSize = 1024;
       source.connect(audioAnalyser);
       const samples = new Uint8Array(audioAnalyser.fftSize);
-
       const monitor = () => {
-        if (!mediaRecorder || mediaRecorder.state !== "recording" || !audioAnalyser) {
+        if (
+          !mediaRecorder ||
+          mediaRecorder.state !== "recording" ||
+          !audioAnalyser
+        ) {
           return;
         }
         audioAnalyser.getByteTimeDomainData(samples);
@@ -523,17 +546,10 @@
           lastVoiceActivityAt = now;
         }
         if (heardSpeech && now - lastVoiceActivityAt >= SILENCE_STOP_MS) {
-          if (recordingRequestMode === "voice") {
-            updateVoiceState("thinking", "Got it…");
-          }
           stopRecording(false);
           return;
         }
         if (!heardSpeech && elapsed >= NO_SPEECH_TIMEOUT_MS) {
-          if (recordingRequestMode === "voice") {
-            voiceSessionActive = false;
-            updateVoiceState("idle", "I didn’t hear anything—tap to retry");
-          }
           stopRecording(true);
           return;
         }
@@ -541,15 +557,21 @@
       };
       audioMonitorFrame = window.requestAnimationFrame(monitor);
     } catch (_error) {
-      // Recording still works with tap-to-stop when audio analysis is unavailable.
+      // Tap-to-stop still works when audio analysis is unavailable.
     }
   }
 
-  async function transcribeRecording(recording, requestMode) {
+  async function transcribeRecording(recording) {
     if (!recording.size) return;
     transcribing = true;
+    micButton.classList.remove("listening");
+    micButton.classList.add("processing");
+    micButton.replaceChildren(voiceActivityIcon());
+    micButton.setAttribute("aria-label", "Processing voice input");
+    micButton.title = "Processing voice input";
     micButton.disabled = true;
-    if (requestMode === "voice") updateVoiceState("thinking", "Got it…");
+    clearButton.disabled = true;
+    workspaceSelect.disabled = true;
     const controller = new AbortController();
     transcriptionController = controller;
     let timedOut = false;
@@ -563,55 +585,46 @@
       const response = await fetch(
         `${apiUrl}/api/transcribe?workspace=${encodeURIComponent(workspace)}`,
         {
-        method: "POST",
-        headers: { "Content-Type": recording.type || "audio/webm" },
-        body: recording,
-        signal: controller.signal,
+          method: "POST",
+          headers: { "Content-Type": recording.type || "audio/webm" },
+          body: recording,
+          signal: controller.signal,
         },
       );
       const payload = await response.json().catch(() => null);
-      if (!response.ok || payload?.success !== true || typeof payload?.text !== "string") {
+      if (
+        !response.ok ||
+        payload?.success !== true ||
+        typeof payload?.text !== "string"
+      ) {
         throw new Error(payload?.error || "The recording could not be transcribed.");
       }
       transcript = payload.text.trim();
     } catch (error) {
       if (controller.signal.aborted && !timedOut) return;
-      const message = timedOut
-        ? "Transcription took too long. Please try again."
-        : error?.message || "Voice transcription is temporarily unavailable.";
-      if (requestMode === "voice") {
-        voiceSessionActive = false;
-        updateVoiceState("idle", "Tap to try again");
-        voiceUserText.textContent = message;
-        voiceUserTurn.classList.remove("hidden");
-      } else {
-        addMessage("error", message);
-      }
+      addMessage(
+        "error",
+        timedOut
+          ? "Transcription took too long. Please try again."
+          : error?.message || "Voice transcription is temporarily unavailable.",
+      );
     } finally {
       window.clearTimeout(timeout);
       if (transcriptionController === controller) transcriptionController = null;
       transcribing = false;
-      micButton.disabled = busy || voiceConfigured === false;
+      resetRecordingControls();
     }
 
-    if (!transcript) return;
+    if (!transcript) {
+      input.focus();
+      return;
+    }
     input.value = transcript;
     resizeInput();
-    if (
-      requestMode === "voice" &&
-      interactionMode === "voice" &&
-      voiceSessionActive
-    ) {
-      voiceUserText.textContent = transcript;
-      voiceUserTurn.classList.remove("hidden");
-      await sendMessage();
-    } else {
-      input.focus();
-      if (requestMode === "chat" && submitSpeech) await sendMessage();
-    }
+    await sendMessage({ fromVoice: true });
   }
 
-  async function startListening(requestMode = interactionMode) {
+  async function startListening() {
     if (
       !mediaCaptureSupported ||
       busy ||
@@ -622,53 +635,43 @@
       return;
     }
     if (voiceConfigured === false) {
-      if (requestMode === "voice") {
-        updateVoiceState("unavailable", "Voice mode needs setup");
-      } else {
-        addMessage("error", "Voice mode is not configured yet.");
-      }
+      addMessage("error", "Voice input is not configured yet.");
       return;
     }
 
     stopAudioPlayback();
-    recordingRequestMode = requestMode;
     discardRecording = false;
     recordingChunks = [];
     heardSpeech = false;
     lastVoiceActivityAt = 0;
+    micButton.disabled = true;
+    clearButton.disabled = true;
+    workspaceSelect.disabled = true;
     const requestedCaptureGeneration = ++captureGeneration;
     try {
-      let requestedStream = mediaStream?.active ? mediaStream : null;
-      if (!requestedStream) {
-        capturePending = true;
-        requestedStream = await navigator.mediaDevices.getUserMedia({
-          audio: {
-            autoGainControl: true,
-            channelCount: 1,
-            echoCancellation: true,
-            noiseSuppression: true,
-            sampleRate: { ideal: 48000 },
-            sampleSize: { ideal: 16 },
-          },
-        });
-      }
+      capturePending = true;
+      const requestedStream = await navigator.mediaDevices.getUserMedia({
+        audio: {
+          autoGainControl: true,
+          channelCount: 1,
+          echoCancellation: true,
+          noiseSuppression: true,
+          sampleRate: { ideal: 48000 },
+          sampleSize: { ideal: 16 },
+        },
+      });
       capturePending = false;
       if (requestedCaptureGeneration !== captureGeneration) {
         requestedStream.getTracks().forEach((track) => track.stop());
         return;
       }
       mediaStream = requestedStream;
-      mediaStream.getAudioTracks().forEach((track) => {
-        track.enabled = true;
-      });
       const preferredMimeType = selectedRecordingMimeType();
       const recorderOptions = {
         ...(preferredMimeType ? { mimeType: preferredMimeType } : {}),
         audioBitsPerSecond: 128000,
       };
-      mediaRecorder = preferredMimeType
-        ? new MediaRecorder(mediaStream, recorderOptions)
-        : new MediaRecorder(mediaStream, recorderOptions);
+      mediaRecorder = new MediaRecorder(mediaStream, recorderOptions);
       recordingMimeType =
         mediaRecorder.mimeType?.split(";", 1)[0] ||
         preferredMimeType.split(";", 1)[0] ||
@@ -679,20 +682,15 @@
       mediaRecorder.addEventListener(
         "stop",
         () => {
-          const requestWasFor = recordingRequestMode;
           const shouldDiscard = discardRecording;
           const recording = new Blob(recordingChunks, {
             type: recordingMimeType,
           });
           mediaRecorder = null;
           recordingChunks = [];
+          cleanupCaptureResources();
           resetRecordingControls();
-          const keepStream =
-            requestWasFor === "voice" &&
-            voiceSessionActive &&
-            interactionMode === "voice";
-          cleanupCaptureResources({ releaseStream: !keepStream });
-          if (!shouldDiscard) void transcribeRecording(recording, requestWasFor);
+          if (!shouldDiscard) void transcribeRecording(recording);
         },
         { once: true },
       );
@@ -701,33 +699,22 @@
         () => {
           discardRecording = true;
           stopRecording(true);
-          if (requestMode === "voice") {
-            voiceSessionActive = false;
-            updateVoiceState("idle", "Recording failed—tap to retry");
-          } else {
-            addMessage("error", "The microphone recording failed.");
-          }
+          addMessage("error", "The microphone recording failed.");
         },
         { once: true },
       );
       mediaRecorder.start(100);
       recordingStartedAt = performance.now();
-      recordingTimeout = window.setTimeout(() => {
-        if (requestMode === "voice") {
-          updateVoiceState("thinking", "Got it…");
-        }
-        stopRecording(!heardSpeech);
-      }, MAX_RECORDING_MS);
+      recordingTimeout = window.setTimeout(
+        () => stopRecording(!heardSpeech),
+        MAX_RECORDING_MS,
+      );
       monitorVoiceActivity(mediaStream);
+      micButton.disabled = false;
       micButton.classList.add("listening");
-      micButton.textContent = "Stop";
+      micButton.replaceChildren(voiceActivityIcon());
       micButton.setAttribute("aria-label", "Stop and transcribe voice input");
-      if (requestMode === "voice") {
-        voiceSessionActive = true;
-        voiceUserText.textContent = "Listening…";
-        voiceUserTurn.classList.remove("hidden");
-        updateVoiceState("listening", "I’m listening…");
-      }
+      micButton.title = "Stop recording";
     } catch (error) {
       capturePending = false;
       cleanupCaptureResources();
@@ -736,87 +723,11 @@
       const permissionDenied = ["NotAllowedError", "SecurityError"].includes(
         error?.name,
       );
-      if (requestMode === "voice") {
-        voiceSessionActive = false;
-        updateVoiceState(
-          "idle",
-          permissionDenied
-            ? "Microphone permission is needed"
-            : "Microphone unavailable—tap to retry",
-        );
-      } else {
-        addMessage(
-          "error",
-          permissionDenied
-            ? "Microphone permission is needed."
-            : "The microphone is unavailable.",
-        );
-      }
-    }
-  }
-
-  async function speakResponse(speechId, callbacks = {}) {
-    if (interactionMode !== "voice" || !voiceSessionActive) {
-      updateVoiceState("idle");
-      return;
-    }
-
-    stopAudioPlayback();
-    const generation = playbackGeneration;
-    updateVoiceState("thinking", "Almost ready…");
-    try {
-      const speechUrl = new URL(
-        `${apiUrl}/api/speech/${encodeURIComponent(speechId)}`,
-      );
-      speechUrl.searchParams.set("sessionId", sessionId);
-      const player = new Audio();
-      responseAudio = player;
-      player.preload = "auto";
-      player.src = speechUrl.href;
-      player.onplaying = () => {
-        if (generation !== playbackGeneration) return;
-        window.clearTimeout(playbackTimeout);
-        playbackTimeout = 0;
-        mediaStream?.getAudioTracks().forEach((track) => {
-          track.enabled = false;
-        });
-        callbacks.onPlaying?.();
-        updateVoiceState("speaking");
-      };
-      player.onended = () => {
-        if (generation !== playbackGeneration) return;
-        responseAudio = null;
-        if (voiceSessionActive && interactionMode === "voice") {
-          updateVoiceState("idle", "Your turn…");
-          void startListening("voice");
-        } else {
-          updateVoiceState("idle");
-        }
-      };
-      player.onerror = () => {
-        if (generation !== playbackGeneration) return;
-        callbacks.onFailure?.();
-        stopAudioPlayback();
-        voiceSessionActive = false;
-        updateVoiceState("idle", "Audio could not play—tap to retry");
-      };
-      playbackTimeout = window.setTimeout(() => {
-        if (generation !== playbackGeneration || !responseAudio) return;
-        callbacks.onFailure?.();
-        stopAudioPlayback();
-        voiceSessionActive = false;
-        updateVoiceState("idle", "Voice took too long—tap to retry");
-      }, AUDIO_REQUEST_TIMEOUT_MS);
-      player.load();
-      await player.play();
-    } catch (error) {
-      if (generation !== playbackGeneration) return;
-      callbacks.onFailure?.();
-      stopAudioPlayback();
-      voiceSessionActive = false;
-      updateVoiceState(
-        "idle",
-        "Voice playback failed—tap to retry",
+      addMessage(
+        "error",
+        permissionDenied
+          ? "Microphone permission is needed."
+          : "The microphone is unavailable.",
       );
     }
   }
@@ -827,27 +738,35 @@
     panel.setAttribute("aria-hidden", String(!open));
     launcher.setAttribute("aria-expanded", String(open));
     if (open) {
-      window.setTimeout(
-        () =>
-          interactionMode === "voice"
-            ? voiceOrbButton.focus()
-            : input.focus(),
-        150,
-      );
+      window.setTimeout(() => input.focus(), 150);
     } else {
-      stopVoiceSession();
+      stopAudioPlayback();
+      if (mediaRecorder?.state === "recording" || capturePending) {
+        cancelVoiceInput();
+      }
       launcher.focus();
     }
   }
 
   function setWorkspace(nextWorkspace, openPanel = false) {
-    if (!WORKSPACES[nextWorkspace] || busy) return;
+    if (
+      !WORKSPACES[nextWorkspace] ||
+      busy ||
+      transcribing ||
+      capturePending ||
+      mediaRecorder?.state === "recording"
+    ) {
+      return;
+    }
     const changed = workspace !== nextWorkspace;
     workspace = nextWorkspace;
     workspaceSelect.value = workspace;
     if (changed) {
-      stopVoiceSession();
-      resetConversation();
+      stopAudioPlayback();
+      sessionId = getSessionId(workspace);
+      input.value = "";
+      renderConversation();
+      resizeInput();
     }
     if (openPanel) setOpen(true);
     document.dispatchEvent(
@@ -869,55 +788,44 @@
         headers: { Accept: "application/json" },
       });
       const payload = await response.json();
-      const ready = payload?.ready === true;
-      voiceConfigured = payload?.voice?.configured === true;
       const anythingLlmReady = payload?.anythingLlm === true;
-      status.textContent = ready
-        ? "Ready"
-        : anythingLlmReady
-          ? "Voice setup"
-          : "Check setup";
-      status.classList.toggle("ready", ready);
-      status.classList.toggle("unavailable", !ready);
-      launcher.classList.toggle("unavailable", !ready);
-      voiceModeButton.disabled = !mediaCaptureSupported || !voiceConfigured;
+      voiceConfigured = payload?.voice?.configured === true;
+      status.textContent = anythingLlmReady ? "Ready" : "Check setup";
+      status.classList.toggle("ready", anythingLlmReady);
+      status.classList.toggle("unavailable", !anythingLlmReady);
+      launcher.classList.toggle("unavailable", !anythingLlmReady);
       micButton.disabled = busy || transcribing || !voiceConfigured;
-      if (!voiceConfigured) {
-        voiceModeButton.title = "Voice mode needs setup";
-        micButton.title = "Voice input needs setup";
-      } else {
-        voiceModeButton.title = "";
-        micButton.title = "Voice input";
-      }
+      voiceReplyButton.disabled =
+        !mediaCaptureSupported || !voiceConfigured;
+      micButton.title = voiceConfigured
+        ? "Voice input"
+        : "Voice input needs setup";
     } catch (_error) {
       voiceConfigured = false;
       status.textContent = "Offline";
       status.classList.add("unavailable");
       launcher.classList.add("unavailable");
-      voiceModeButton.disabled = true;
       micButton.disabled = true;
+      voiceReplyButton.disabled = true;
     }
   }
 
-  async function sendMessage() {
+  async function sendMessage(options = {}) {
     const message = input.value.trim();
     if (!message || busy) return;
-    const requestMode = interactionMode;
-
+    const shouldSpeak =
+      options.fromVoice === true &&
+      voiceRepliesEnabled &&
+      voiceConfigured !== false;
+    stopAudioPlayback();
     addMessage("user", message);
-    if (requestMode === "voice") {
-      voiceUserText.textContent = message;
-      voiceUserTurn.classList.remove("hidden");
-      voiceAgentTurn.classList.add("hidden");
-      updateVoiceState("thinking");
-    }
     input.value = "";
     busy = true;
     clearButton.disabled = true;
-    resizeInput();
     input.disabled = true;
     micButton.disabled = true;
     workspaceSelect.disabled = true;
+    resizeInput();
     const typing = addTypingIndicator();
     const controller = new AbortController();
     const timeout = window.setTimeout(
@@ -933,18 +841,11 @@
           message,
           workspace,
           sessionId,
-          voice: requestMode === "voice" && voiceSessionActive,
+          voice: shouldSpeak,
         }),
         signal: controller.signal,
       });
-
-      let payload;
-      try {
-        payload = await response.json();
-      } catch (_error) {
-        throw new Error("The server returned an invalid response.");
-      }
-
+      const payload = await response.json().catch(() => null);
       if (
         !response.ok ||
         payload?.success !== true ||
@@ -956,51 +857,19 @@
             : "The assistant could not answer. Please try again.",
         );
       }
-
       typing.remove();
-      const shouldSpeak =
-        requestMode === "voice" &&
-        interactionMode === "voice" &&
-        voiceSessionActive &&
-        typeof payload.speechId === "string";
-      const responseView = addAnimatedResponse(payload.message, {
-        deferred: shouldSpeak,
-      });
-      if (requestMode === "voice") {
-        const startVoiceReveal = renderVoiceResponse(
-          payload.message,
-          shouldSpeak,
-        );
-        if (shouldSpeak) {
-          let revealed = false;
-          const revealResponse = () => {
-            if (revealed) return;
-            revealed = true;
-            responseView.startReveal();
-            startVoiceReveal();
-          };
-          await speakResponse(payload.speechId, {
-            onPlaying: revealResponse,
-            onFailure: revealResponse,
-          });
-        } else if (voiceSessionActive && interactionMode === "voice") {
-          updateVoiceState("idle", "Your turn…");
-          void startListening("voice");
-        }
+      addAnimatedResponse(payload.message);
+      if (shouldSpeak && typeof payload.speechId === "string") {
+        void playSpeech(payload.speechId);
       }
     } catch (error) {
       typing.remove();
-      const errorMessage =
+      addMessage(
+        "error",
         error?.name === "AbortError"
           ? "That took too long. Please try the question again."
-          : error?.message || "The assistant is unreachable. Please try again.";
-      addMessage("error", errorMessage);
-      if (requestMode === "voice") {
-        voiceSessionActive = false;
-        voiceAgentText.textContent = errorMessage;
-        voiceAgentTurn.classList.remove("hidden");
-        updateVoiceState("idle", "Tap to try again");
-      }
+          : error?.message || "The assistant is unreachable. Please try again.",
+      );
     } finally {
       window.clearTimeout(timeout);
       busy = false;
@@ -1009,44 +878,23 @@
       micButton.disabled = transcribing || voiceConfigured === false;
       workspaceSelect.disabled = false;
       resizeInput();
-      if (interactionMode === "chat") input.focus();
+      input.focus();
     }
   }
 
   if (!mediaCaptureSupported) {
     micButton.hidden = true;
-    voiceModeButton.disabled = true;
-    voiceModeButton.title = "Microphone recording is not supported in this browser";
+    micButton.title = "Microphone recording is not supported in this browser";
+    voiceReplyButton.disabled = true;
+    voiceReplyButton.title = "Microphone recording is not supported in this browser";
   }
 
-  chatModeButton.addEventListener("click", () => setInteractionMode("chat"));
-  voiceModeButton.addEventListener("click", () => setInteractionMode("voice"));
-  micButton.addEventListener("click", () => {
-    if (mediaRecorder?.state === "recording") {
-      stopRecording(false);
-    } else {
-      void startListening("chat");
-    }
+  voiceReplyButton.addEventListener("click", () => {
+    setVoiceRepliesEnabled(!voiceRepliesEnabled);
   });
-  voiceOrbButton.addEventListener("click", () => {
-    if (voiceState === "listening") {
-      updateVoiceState("thinking", "Got it…");
-      stopRecording(false);
-      return;
-    }
-    if (voiceState === "speaking") {
-      stopAudioPlayback();
-      void startListening("voice");
-      return;
-    }
-    if (voiceState === "thinking") {
-      voiceSessionActive = false;
-      transcriptionController?.abort();
-      stopAudioPlayback();
-      updateVoiceState("idle", "Paused—tap to continue");
-      return;
-    }
-    void startListening("voice");
+  micButton.addEventListener("click", () => {
+    if (mediaRecorder?.state === "recording") stopRecording(false);
+    else void startListening();
   });
   launcher.addEventListener("click", () => setOpen(true));
   clearButton.addEventListener("click", clearConversation);
@@ -1058,18 +906,15 @@
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
-      sendMessage();
+      void sendMessage();
     }
   });
   composer.addEventListener("submit", (event) => {
     event.preventDefault();
-    sendMessage();
+    void sendMessage();
   });
   document.addEventListener("assistant:set-workspace", (event) => {
     setWorkspace(event.detail?.workspace, true);
-  });
-  document.addEventListener("assistant:set-mode", (event) => {
-    setInteractionMode(event.detail?.mode);
   });
   document.addEventListener("keydown", (event) => {
     if (event.key === "Escape" && panel.classList.contains("open")) {
@@ -1077,7 +922,8 @@
     }
   });
 
-  resetConversation();
+  renderConversation();
+  updateVoiceReplyButton();
   resizeInput();
-  checkReadiness();
+  void checkReadiness();
 })();

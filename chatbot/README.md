@@ -1,6 +1,6 @@
 # Webflow AnythingLLM Chat Widget
 
-A small floating chat widget for Webflow. The browser sends text and a public workspace name to an Express gateway. The gateway validates the request, maps the public name to an internal AnythingLLM workspace slug, and adds the private AnythingLLM API key server-side.
+A small floating chat widget for Webflow. The browser sends text and a public workspace name to an Express gateway. The gateway validates the request, maps the public name to an internal AnythingLLM workspace slug, invokes AnythingLLM agent mode, and adds the private AnythingLLM API key server-side.
 
 ## Architecture
 
@@ -8,9 +8,9 @@ A small floating chat widget for Webflow. The browser sends text and a public wo
 Webflow page
   -> chat-widget.js
   -> Express gateway (/api/transcribe, /api/chat, /api/speech)
-  -> OpenAI speech-to-text
+  -> OpenAI speech-to-text for microphone input
+  -> OpenAI text-to-speech for optional spoken replies
   -> selected AnythingLLM workspace
-  -> OpenAI text-to-speech
 ```
 
 Neither the AnythingLLM API key nor the OpenAI API key is sent to the browser. AnythingLLM should remain bound to localhost or a private Docker network.
@@ -25,7 +25,7 @@ npm install
 npm start
 ```
 
-On a new installation, copy `.env.example` to `.env` and add both the AnythingLLM Developer API key and an OpenAI API key before starting. Open `http://localhost:3000` for a blank widget-only preview. The gateway also serves the widget assets, readiness endpoint, chat API, and audio API; Webflow provides the production page.
+On a new installation, copy `.env.example` to `.env` and add both the AnythingLLM Developer API key and an OpenAI API key before starting. Open `http://localhost:3000` for a blank widget-only preview. The gateway also serves the widget assets, readiness endpoint, chat API, and transcription API; Webflow provides the production page.
 
 Confirm the gateway is running:
 
@@ -57,7 +57,11 @@ The embedded widget provides:
 
 - An empty conversation area ready for the visitor's first question.
 - Workspace switching for MirrorXR, Augmenthink, and Clevart.
-- A Chat/Voice mode switch with accurate transcription, natural spoken replies, silence detection, hands-free follow-up turns, and tap-to-interrupt controls.
+- One chat interface for typed and microphone input, with every turn displayed as text.
+- AnythingLLM agent mode for every message, including web search when the Web Browsing agent skill is enabled.
+- Browser-persistent chat history for each workspace that remains until the visitor selects Clear.
+- A microphone button with accurate transcription, silence detection, and automatic submission.
+- A top-right speaker button that enables spoken assistant replies for microphone-origin messages and remembers the visitor's choice.
 - A live readiness indicator backed by `GET /api/readiness`.
 - A clear-chat control that starts a fresh browser and AnythingLLM session.
 
@@ -70,8 +74,9 @@ The embedded widget provides:
 | `OPENAI_API_KEY` | `...` | OpenAI API key for STT and TTS; server only |
 | `OPENAI_STT_MODEL` | `gpt-transcribe` | Recorded-audio transcription model |
 | `OPENAI_TTS_MODEL` | `gpt-4o-mini-tts` | Neural text-to-speech model |
-| `OPENAI_TTS_VOICE` | `marin` | OpenAI built-in voice |
-| `OPENAI_TTS_INSTRUCTIONS` | `Speak warmly...` | Optional delivery, pacing, and accent direction |
+| `OPENAI_TTS_VOICE` | `cedar` | High-quality OpenAI voice used to approximate the reference voice |
+| `OPENAI_TTS_SPEED` | `1.2` | Speech speed multiplier; OpenAI accepts values from 0.25 to 4.0 |
+| `OPENAI_TTS_INSTRUCTIONS` | `Speak in polished British English...` | Delivery instructions approximating en-GB, a male-presenting voice, and elevated pitch |
 | `PORT` | `3000` | Express gateway port |
 | `ALLOWED_ORIGIN` | `http://localhost:3000` | Exact browser origin allowed by CORS, without a path; use the Webflow origin in production |
 
@@ -118,9 +123,9 @@ Replace both hostnames with the same Render gateway hostname. Add the script in 
 
 Set `data-workspace` to one of the public keys `mirrorxr`, `augmenthink`, or `clevart`. Omit it to use `augmenthink`.
 
-In **Chat** mode, the microphone records a bounded utterance and fills the text field with the OpenAI transcript without submitting automatically. To opt in to automatic submission there, add `data-submit-speech="true"`. In **Voice** mode, the first tap starts a hands-free loop: record, stop after silence, transcribe with OpenAI, query AnythingLLM, generate OpenAI speech, play it, then listen for the next turn. Tapping the voice orb while the assistant is speaking interrupts playback.
+Visitors can type and send normally or tap the microphone button to record a bounded utterance. Microphone input stops after silence (or another tap), is transcribed with OpenAI, and is submitted automatically. The transcript and the assistant's response both appear as normal text messages in the same chat window. When the top-right speaker button is enabled, responses to microphone input are also played aloud; typed messages remain text-only.
 
-## Voice architecture
+## Microphone input architecture
 
 The widget does not use `SpeechRecognition`, `webkitSpeechRecognition`, `speechSynthesis`, or `SpeechSynthesisUtterance`. It records compressed microphone audio with `MediaRecorder`, uses local volume analysis only to detect the end of an utterance, and sends the completed recording to the Express gateway. All OpenAI calls and credentials stay server-side.
 
@@ -129,14 +134,14 @@ Browser MediaRecorder + silence detection
   -> POST /api/transcribe?workspace=...
   -> OpenAI gpt-transcribe
   -> AnythingLLM workspace chat
-  -> full display formatter + separate speech-only formatter
-  -> short-lived, session-bound speech ID
-  -> GET /api/speech/:speechId (chunked stream)
-  -> OpenAI gpt-4o-mini-tts (marin)
-  -> streaming MP3 playback in the browser
+  -> text response in the chat window
+  -> when spoken replies are enabled: short-lived speech ID
+  -> GET /api/speech/:speechId
+  -> OpenAI text-to-speech
+  -> audio playback in the browser
 ```
 
-The display formatter removes Markdown artifacts while preserving the full answer, including plain-text code content. The separate speech formatter removes fenced and inline code, URLs, emoji, citations, HTML, and formatting; turns lists into natural spoken transitions; normalizes punctuation; and caps only the TTS input. The speech-only string stays server-side and is fetched through a short-lived ID, so the browser never reposts the full answer for TTS. The UI includes microphone permission handling, automatic silence stop, a 45-second recording ceiling, request timeouts, interruption, automatic follow-up turns, synchronized text reveal, and the required AI-voice disclosure.
+The display formatter removes Markdown artifacts while preserving the full answer, including plain-text code content. The UI includes microphone permission handling, automatic silence stop, a 45-second recording ceiling, request timeouts, tap-to-stop controls, and visible loading/playback states on the speaker button. Chat messages, session IDs, and the spoken-reply preference are stored in browser local storage; selecting Clear removes the visible history and starts a new AnythingLLM session for that workspace.
 
 ## API behavior
 
@@ -183,13 +188,13 @@ node --check server.js
 node --check ../widget/chat-widget.js
 ```
 
-The tests cover health, invalid input, arbitrary workspace rejection, CORS, workspace-to-upstream mapping, authorization forwarding, response normalization, malformed upstream data, speech formatting, OpenAI transcription uploads, OpenAI TTS audio, and missing voice credentials.
+The tests cover health, invalid input, arbitrary workspace rejection, CORS, workspace-to-upstream mapping, authorization forwarding, response normalization, malformed upstream data, voice/text response alignment, OpenAI transcription uploads, OpenAI TTS audio, and missing voice credentials.
 
 ## MVP limitations
 
-- Chat history is retained by AnythingLLM using the stored browser session ID; this widget does not render older messages after a page reload.
+- Visible chat history and AnythingLLM session IDs are retained per workspace in browser local storage until the visitor selects Clear or clears browser storage.
 - `localStorage` sessions are browser- and origin-specific and can be cleared by the user.
-- Transcription is file-based rather than token-streaming, so the transcript appears after silence is detected or the user taps stop.
+- Transcription is file-based rather than token-streaming, so the transcript is sent and displayed after silence is detected or the user taps stop.
 - File transcription starts after silence is detected; the OpenAI Realtime API would be the next step if live partial transcripts become a requirement.
 - The rate limiter is in memory. Use a shared store such as Redis when running more than one gateway process.
 - CORS is not authentication. For private or abuse-sensitive deployments, add user authentication, bot protection, and Cloudflare rate limiting.
