@@ -62,6 +62,7 @@ The embedded widget provides:
 - Browser-persistent chat history for each workspace that remains until the visitor selects Clear.
 - A microphone button with accurate transcription, silence detection, and automatic submission.
 - A top-right speaker button that enables spoken assistant replies for microphone-origin messages and remembers the visitor's choice.
+- A responsive full-screen mobile layout with safe-area spacing, touch-friendly controls, and keyboard-aware composer sizing.
 - A live readiness indicator backed by `GET /api/readiness`.
 - A clear-chat control that starts a fresh browser and AnythingLLM session.
 
