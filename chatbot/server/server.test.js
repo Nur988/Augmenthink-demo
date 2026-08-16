@@ -54,11 +54,21 @@ test("gateway serves a widget-only preview and widget assets", async (t) => {
   const cssResponse = await fetch(`${gateway.url}/chat-widget.css`);
   assert.equal(cssResponse.status, 200);
   assert.match(cssResponse.headers.get("content-type"), /text\/css/);
+  assert.equal(cssResponse.headers.get("cache-control"), "no-store");
 
   const widgetResponse = await fetch(`${gateway.url}/chat-widget.js`);
   const widgetScript = await widgetResponse.text();
   assert.equal(widgetResponse.status, 200);
+  assert.equal(widgetResponse.headers.get("cache-control"), "no-store");
   assert.match(widgetScript, /Clear chat and start a new conversation/);
+  assert.match(widgetScript, /assistant-chat-history-v1/);
+  assert.match(widgetScript, /assistant-voice-indicator/);
+  assert.match(widgetScript, /Processing voice input/);
+  assert.match(widgetScript, /assistant-voice-replies-enabled/);
+  assert.match(widgetScript, /spoken replies for voice input/);
+  assert.match(widgetScript, /await sendMessage\(\{ fromVoice: true \}\)/);
+  assert.doesNotMatch(widgetScript, /assistant-mode-switch|assistant:set-mode/);
+  assert.match(widgetScript, /api\/speech/);
   assert.doesNotMatch(widgetScript, /assistant-sources|createSources/);
   assert.doesNotMatch(widgetScript, /assistant-suggestions|Try asking|greeting:/);
 });
@@ -95,7 +105,7 @@ test("readiness confirms API access and required workspaces", async (t) => {
       configured: true,
       sttModel: "gpt-transcribe",
       ttsModel: "gpt-4o-mini-tts",
-      ttsVoice: "marin",
+      ttsVoice: "cedar",
     },
     workspaces: { mirrorxr: true, augmenthink: true, clevart: true },
   });
@@ -157,7 +167,7 @@ test("chat endpoint enforces the configured browser origin", async (t) => {
   });
 });
 
-test("chat endpoint maps workspace and normalizes AnythingLLM response", async (t) => {
+test("chat endpoint sends agent mode, maps workspace, and normalizes the response", async (t) => {
   let upstreamRequest;
   const gateway = await startTestServer({
     anythingLlmUrl: "http://anythingllm.internal:3001",
@@ -193,10 +203,37 @@ test("chat endpoint maps workspace and normalizes AnythingLLM response", async (
     "Bearer server-only-secret",
   );
   assert.deepEqual(JSON.parse(upstreamRequest.options.body), {
-    message: "Hello",
+    message: "@agent Hello",
     mode: "chat",
     sessionId: "session-1",
   });
+});
+
+test("chat endpoint does not duplicate an existing agent trigger", async (t) => {
+  let upstreamRequest;
+  const gateway = await startTestServer({
+    anythingLlmApiKey: "test-key",
+    fetchImpl: async (_url, options) => {
+      upstreamRequest = options;
+      return new Response(JSON.stringify({ textResponse: "Search complete" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      });
+    },
+  });
+  t.after(() => gateway.server.close());
+
+  const response = await postChat(gateway.url, {
+    message: "@Agent search the web for current news",
+    workspace: "augmenthink",
+    sessionId: "session-agent",
+  });
+
+  assert.equal(response.status, 200);
+  assert.equal(
+    JSON.parse(upstreamRequest.body).message,
+    "@agent search the web for current news",
+  );
 });
 
 test("source normalization keeps display text and safe web links", () => {
@@ -247,8 +284,8 @@ test("chat endpoint rejects malformed upstream responses", async (t) => {
   assert.equal((await response.json()).success, false);
 });
 
-test("speech formatter produces concise, speakable text", () => {
-  const formatted = formatSpeechText(`
+test("speech formatter stays aligned with the displayed response", () => {
+  const source = `
 # Result 🚀
 
 - Read [the guide](https://example.com/docs).
@@ -258,13 +295,13 @@ test("speech formatter produces concise, speakable text", () => {
 \`\`\`js
 console.log("not spoken");
 \`\`\`
-  `);
+  `;
+  const formatted = formatSpeechText(source);
 
-  assert.equal(
-    formatted,
-    "Result. First, read the guide. Next, visit. Finally, run now.",
-  );
-  assert.doesNotMatch(formatted, /🚀|https|inline_code|console\.log|```/);
+  assert.equal(formatted, formatDisplayText(source));
+  assert.match(formatted, /Result 🚀/);
+  assert.match(formatted, /inline_code\(\)|console\.log/);
+  assert.doesNotMatch(formatted, /```|\]\(/);
 });
 
 test("display formatter removes Markdown artifacts without truncating content", () => {
@@ -380,10 +417,15 @@ test("speech endpoint streams cached speech-safe text as audio", async (t) => {
   );
   const body = JSON.parse(upstreamRequest.options.body);
   assert.equal(body.model, "gpt-4o-mini-tts");
-  assert.equal(body.voice, "marin");
-  assert.equal(body.input, "Update. First, read the brief. Finally, run now.");
-  assert.doesNotMatch(body.input, /✨|https|secret_code|`/);
-  assert.match(body.instructions, /warmly and naturally/i);
+  assert.equal(body.voice, "cedar");
+  assert.equal(body.input, chatPayload.message);
+  assert.equal(
+    body.input,
+    "Update ✨\n• Read the brief.\n• Run secret_code() now.",
+  );
+  assert.match(body.instructions, /British English \(en-GB\)/i);
+  assert.match(body.instructions, /\+1\.6 pitch adjustment/i);
+  assert.equal(body.speed, 1.2);
   assert.equal(body.response_format, "mp3");
 });
 

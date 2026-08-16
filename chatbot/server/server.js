@@ -12,7 +12,6 @@ dotenv.config();
 
 const DEFAULT_PORT = 3000;
 const MAX_MESSAGE_LENGTH = 4000;
-const MAX_SPEECH_OUTPUT_LENGTH = 3800;
 const READINESS_TIMEOUT_MS = 5000;
 const UPSTREAM_TIMEOUT_MS = 30000;
 const OPENAI_AUDIO_TIMEOUT_MS = 45000;
@@ -167,46 +166,6 @@ function formatDisplayText(input) {
     .trim();
 }
 
-function convertSpeechLists(input) {
-  const lines = input.split("\n");
-  const output = [];
-  const naturalizeItem = (item) =>
-    item.replace(
-      /^(Ask|Check|Choose|Compare|Consider|Open|Read|Review|Run|Select|Start|Use|Visit)\b/,
-      (word) => word.toLowerCase(),
-    );
-
-  for (let index = 0; index < lines.length; index += 1) {
-    const match = lines[index].match(/^\s*(?:[-*+•]|\d+[.)])\s+(.+)$/);
-    if (!match) {
-      output.push(lines[index]);
-      continue;
-    }
-
-    const items = [];
-    while (index < lines.length) {
-      const item = lines[index].match(/^\s*(?:[-*+•]|\d+[.)])\s+(.+)$/);
-      if (!item) break;
-      items.push(item[1].trim().replace(/[.;:,]+$/, ""));
-      index += 1;
-    }
-    index -= 1;
-
-    const sentences = items.map((item, itemIndex) => {
-      let transition = "";
-      if (items.length > 1) {
-        if (itemIndex === 0) transition = "First, ";
-        else if (itemIndex === items.length - 1) transition = "Finally, ";
-        else transition = "Next, ";
-      }
-      return `${transition}${naturalizeItem(item)}.`;
-    });
-    output.push(sentences.join(" "));
-  }
-
-  return output.join("\n");
-}
-
 function decodeSpeechEntities(value) {
   const namedEntities = {
     amp: "&",
@@ -235,48 +194,8 @@ function decodeSpeechEntities(value) {
   );
 }
 
-function formatSpeechText(input, maxLength = MAX_SPEECH_OUTPUT_LENGTH) {
-  if (typeof input !== "string") return "";
-
-  let text = decodeSpeechEntities(input.normalize("NFKC"));
-  text = text
-    .replace(/```[\s\S]*?```|~~~[\s\S]*?~~~/g, " ")
-    .replace(/```[\s\S]*$|~~~[\s\S]*$/g, " ")
-    .replace(/`[^`\n]*`/g, " ")
-    .replace(/!\[([^\]]*)\]\([^)]+\)/g, "$1 ")
-    .replace(/\[([^\]]+)\]\([^)]+\)/g, "$1")
-    .replace(/\[([^\]]+)\]\[[^\]]*\]/g, "$1")
-    .replace(/\[(?:source\s*)?\d+(?:\s*,\s*\d+)*\]/gi, "")
-    .replace(/(?:https?:\/\/|www\.)[^\s)]+/gi, " ")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/^\s{0,3}#{1,6}\s+(.+)$/gm, "$1. ")
-    .replace(/^\s*>+\s?/gm, "")
-    .replace(/^\s*\|?\s*:?-{3,}:?\s*(?:\|\s*:?-{3,}:?\s*)+\|?\s*$/gm, "")
-    .replace(/\|/g, ". ")
-    .replace(/[*_~]/g, "")
-    .replace(
-      /[\p{Extended_Pictographic}\p{Emoji_Modifier}\p{Regional_Indicator}\u200D\u20E3\uFE0E\uFE0F]/gu,
-      "",
-    );
-  text = convertSpeechLists(text)
-    .replace(/\n{2,}/g, ". ")
-    .replace(/\n/g, " ");
-  text = text
-    .replace(/\s+([,.;:!?])/g, "$1")
-    .replace(/\.{2,}/g, ".")
-    .replace(/\s+/g, " ")
-    .trim();
-
-  if (text.length <= maxLength) return text;
-  const candidate = text.slice(0, maxLength - 1);
-  const sentenceEnd = Math.max(
-    candidate.lastIndexOf(". "),
-    candidate.lastIndexOf("? "),
-    candidate.lastIndexOf("! "),
-  );
-  const wordEnd = candidate.lastIndexOf(" ");
-  const cutAt = sentenceEnd >= maxLength * 0.65 ? sentenceEnd + 1 : wordEnd;
-  return `${candidate.slice(0, Math.max(cutAt, 1)).trim()}…`;
+function formatSpeechText(input) {
+  return formatDisplayText(input);
 }
 
 function createApp(options = {}) {
@@ -299,11 +218,20 @@ function createApp(options = {}) {
   const openAiTtsModel =
     options.openAiTtsModel || process.env.OPENAI_TTS_MODEL || "gpt-4o-mini-tts";
   const openAiTtsVoice =
-    options.openAiTtsVoice || process.env.OPENAI_TTS_VOICE || "marin";
+    options.openAiTtsVoice || process.env.OPENAI_TTS_VOICE || "cedar";
+  const configuredTtsSpeed = Number(
+    options.openAiTtsSpeed ?? process.env.OPENAI_TTS_SPEED ?? 1.2,
+  );
+  const openAiTtsSpeed =
+    Number.isFinite(configuredTtsSpeed) &&
+    configuredTtsSpeed >= 0.25 &&
+    configuredTtsSpeed <= 4
+      ? configuredTtsSpeed
+      : 1.2;
   const openAiTtsInstructions =
     options.openAiTtsInstructions ||
     process.env.OPENAI_TTS_INSTRUCTIONS ||
-    "Speak warmly and naturally, with confident conversational pacing, subtle emotional variation, and clear Australian English pronunciation. Avoid sounding like an announcer.";
+    "Speak in polished British English (en-GB) with a clear male-presenting voice and a moderately elevated, natural pitch, approximating a +1.6 pitch adjustment. Sound warm, articulate, and confident. Avoid sounding like an announcer.";
   const allowedOrigin = normalizeOrigin(
     options.allowedOrigin || process.env.ALLOWED_ORIGIN || "http://localhost:3000",
   );
@@ -376,11 +304,11 @@ function createApp(options = {}) {
     response.sendFile(path.join(widgetDirectory, "preview.html"));
   });
   app.get("/chat-widget.js", (_request, response) => {
-    response.setHeader("Cache-Control", "public, max-age=300");
+    response.setHeader("Cache-Control", "no-store");
     response.sendFile(path.join(widgetDirectory, "chat-widget.js"));
   });
   app.get("/chat-widget.css", (_request, response) => {
-    response.setHeader("Cache-Control", "public, max-age=300");
+    response.setHeader("Cache-Control", "no-store");
     response.sendFile(path.join(widgetDirectory, "chat-widget.css"));
   });
 
@@ -508,7 +436,9 @@ function createApp(options = {}) {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            message: request.body.message.trim(),
+            message: /^@agent\b/i.test(request.body.message.trim())
+              ? request.body.message.trim().replace(/^@agent\b/i, "@agent")
+              : `@agent ${request.body.message.trim()}`,
             mode: "chat",
             sessionId: request.body.sessionId,
           }),
@@ -731,6 +661,7 @@ function createApp(options = {}) {
           voice: openAiTtsVoice,
           input: speech.text,
           instructions: openAiTtsInstructions,
+          speed: openAiTtsSpeed,
           response_format: "mp3",
         }),
         signal: controller.signal,

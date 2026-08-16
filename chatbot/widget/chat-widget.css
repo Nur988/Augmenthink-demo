@@ -59,12 +59,10 @@ select {
 
 .assistant-launcher:focus-visible,
 .assistant-icon-button:focus-visible,
+.assistant-header-voice:focus-visible,
 .assistant-action:focus-visible,
 .assistant-clear-button:focus-visible,
-.assistant-mode-option:focus-visible,
-.assistant-voice-orb:focus-visible,
-.assistant-workspace-select:focus-visible,
-.assistant-input:focus-visible {
+.assistant-workspace-select:focus-visible {
   outline: 3px solid rgb(114 89 255 / 28%);
   outline-offset: 2px;
 }
@@ -109,7 +107,7 @@ select {
   bottom: max(24px, env(safe-area-inset-bottom));
   box-shadow: 0 30px 90px rgb(25 20 68 / 24%);
   display: grid;
-  grid-template-rows: auto auto minmax(0, 1fr) auto;
+  grid-template-rows: auto minmax(0, 1fr) auto;
   height: min(660px, calc(100dvh - 48px));
   opacity: 0;
   overflow: hidden;
@@ -207,6 +205,58 @@ select {
   align-items: center;
   display: flex;
   gap: 5px;
+}
+
+.assistant-header-voice {
+  align-items: center;
+  background: rgb(255 255 255 / 7%);
+  border: 1px solid rgb(255 255 255 / 12%);
+  border-radius: 10px;
+  color: #bdbdca;
+  cursor: pointer;
+  display: flex;
+  flex: 0 0 32px;
+  height: 32px;
+  justify-content: center;
+  padding: 0;
+  position: relative;
+  transition: background-color 150ms ease, color 150ms ease, transform 150ms ease;
+  width: 32px;
+}
+
+.assistant-header-voice svg {
+  fill: currentColor;
+  height: 17px;
+  width: 17px;
+}
+
+.assistant-header-voice:hover:not(:disabled) {
+  background: rgb(255 255 255 / 13%);
+  color: #fff;
+}
+
+.assistant-header-voice.active {
+  background: #fff;
+  color: #202033;
+}
+
+.assistant-header-voice.loading svg {
+  animation: assistant-voice-reply-pulse 900ms ease-in-out infinite;
+}
+
+.assistant-header-voice.playing::after {
+  animation: assistant-voice-reply-ring 1.35s ease-out infinite;
+  border: 1px solid rgb(255 255 255 / 68%);
+  border-radius: 12px;
+  content: "";
+  inset: -4px;
+  pointer-events: none;
+  position: absolute;
+}
+
+.assistant-header-voice:disabled {
+  cursor: default;
+  opacity: 0.42;
 }
 
 .assistant-status {
@@ -313,14 +363,12 @@ select {
 }
 
 .assistant-messages {
-  background:
-    linear-gradient(rgb(245 245 250 / 52%) 1px, transparent 1px) 0 0 / 100% 48px,
-    var(--assistant-surface);
+  background: #fff;
   min-height: 0;
   overflow-y: auto;
   overscroll-behavior: contain;
-  padding: 20px 16px 14px;
-  scrollbar-color: #cccbd7 transparent;
+  padding: 22px 18px 12px;
+  scrollbar-color: #d9d9d9 transparent;
   scrollbar-width: thin;
 }
 
@@ -549,7 +597,7 @@ select {
   align-items: flex-start;
   display: flex;
   flex-direction: column;
-  margin: 0 0 14px;
+  margin: 0 0 20px;
   width: 100%;
 }
 
@@ -557,24 +605,34 @@ select {
   align-items: flex-end;
 }
 
-.assistant-message {
+.assistant-message-row.assistant .assistant-message {
   background: #f0eff7;
   border: 1px solid #e7e5f0;
   border-radius: 5px 15px 15px 15px;
-  color: var(--assistant-ink);
-  font-size: 14px;
-  line-height: 1.58;
   max-width: 88%;
-  overflow-wrap: anywhere;
   padding: 11px 13px;
+}
+
+.assistant-message {
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  color: #2f2f2f;
+  font-size: 14px;
+  line-height: 1.65;
+  max-width: 100%;
+  overflow-wrap: anywhere;
+  padding: 0 2px;
   white-space: pre-wrap;
 }
 
 .assistant-message-row.user .assistant-message {
-  background: linear-gradient(145deg, #7963f3, #5f48df);
+  background: #f4f4f4;
   border: 0;
-  border-radius: 15px 5px 15px 15px;
-  color: #fff;
+  border-radius: 18px;
+  color: #2f2f2f;
+  max-width: 82%;
+  padding: 10px 14px;
 }
 
 .assistant-message-row.error .assistant-message {
@@ -594,18 +652,7 @@ select {
 }
 
 .assistant-response::after {
-  animation: assistant-response-sheen 920ms ease-out 80ms both;
-  background: linear-gradient(
-    105deg,
-    transparent 18%,
-    rgb(255 255 255 / 62%) 48%,
-    transparent 78%
-  );
-  content: "";
-  inset: 0;
-  pointer-events: none;
-  position: absolute;
-  transform: translateX(-120%);
+  display: none;
 }
 
 .assistant-response-word {
@@ -632,13 +679,14 @@ select {
   align-items: center;
   display: flex;
   gap: 4px;
-  height: 42px;
-  width: 55px;
+  height: 28px;
+  padding: 0 2px;
+  width: 46px;
 }
 
 .assistant-typing span {
   animation: assistant-bounce 1.2s infinite ease-in-out;
-  background: #9694a8;
+  background: #8e8e8e;
   border-radius: 50%;
   height: 6px;
   width: 6px;
@@ -654,50 +702,69 @@ select {
 
 .assistant-composer {
   align-items: flex-end;
-  background: var(--assistant-surface);
-  border-top: 1px solid var(--assistant-line);
+  background: #fff;
+  border: 1px solid #dedede;
+  border-radius: 26px;
+  box-shadow: 0 2px 12px rgb(0 0 0 / 7%);
   display: grid;
-  gap: 8px;
+  gap: 4px;
   grid-template-columns: minmax(0, 1fr) auto auto;
-  padding: 12px;
+  margin: 0 12px 12px;
+  padding: 6px 7px 6px 16px;
+  transition: border-color 150ms ease, box-shadow 150ms ease;
+}
+
+.assistant-composer:focus-within {
+  border-color: #dedede;
+  box-shadow: 0 2px 12px rgb(0 0 0 / 7%);
 }
 
 .assistant-input {
-  background: var(--assistant-soft);
-  border: 1px solid transparent;
-  border-radius: 12px;
-  color: var(--assistant-ink);
+  background: #fff;
+  border: 0;
+  border-radius: 0;
+  color: #2f2f2f;
   font-size: 14px;
   max-height: 120px;
-  min-height: 44px;
+  min-height: 36px;
+  min-width: 0;
   outline: 0;
   overflow-y: auto;
-  padding: 11px 12px;
+  padding: 8px 0 7px;
   resize: none;
   width: 100%;
 }
 
 .assistant-input::placeholder {
-  color: #85869a;
+  color: #8f8f8f;
 }
 
-.assistant-input:focus {
+.assistant-input:focus,
+.assistant-input:focus-visible,
+.assistant-input:active {
   background: #fff;
-  border-color: var(--assistant-accent);
-  box-shadow: 0 0 0 3px rgb(114 89 255 / 9%);
+  border: 0 !important;
+  box-shadow: none !important;
+  outline: 0 !important;
 }
 
 .assistant-action {
   align-items: center;
   border: 0;
-  border-radius: 13px;
+  border-radius: 50%;
   cursor: pointer;
   display: flex;
-  flex: 0 0 44px;
-  height: 44px;
+  flex: 0 0 36px;
+  height: 36px;
   justify-content: center;
   padding: 0;
-  width: 44px;
+  width: 36px;
+}
+
+.assistant-action svg {
+  fill: currentColor;
+  height: 20px;
+  width: 20px;
 }
 
 .assistant-action:disabled,
@@ -707,34 +774,88 @@ select {
 }
 
 .assistant-mic {
-  background: var(--assistant-soft);
-  color: var(--assistant-muted);
-  font-size: 10px;
-  font-weight: 750;
+  background: transparent;
+  color: #4d4d4d;
 }
 
 .assistant-mic:hover:not(:disabled) {
-  background: #eae9f2;
-  color: var(--assistant-ink);
+  background: #f1f1f1;
+  color: #1f1f1f;
 }
 
 .assistant-mic.listening {
   animation: assistant-pulse 1.5s infinite;
-  background: #fff0ee;
-  color: #ad3328;
-  font-size: 9px;
+  background: #212121;
+  color: #fff;
+}
+
+.assistant-mic.processing,
+.assistant-mic.processing:disabled {
+  background: #ededed;
+  color: #212121;
+  cursor: wait;
+  opacity: 1;
+}
+
+.assistant-voice-indicator {
+  align-items: center;
+  display: flex;
+  gap: 2px;
+  height: 18px;
+  justify-content: center;
+  width: 20px;
+}
+
+.assistant-voice-indicator i {
+  background: currentColor;
+  border-radius: 999px;
+  display: block;
+  height: 8px;
+  transform-origin: center;
+  width: 2px;
+}
+
+.assistant-mic.listening .assistant-voice-indicator i {
+  animation: assistant-listening-bar 520ms ease-in-out infinite alternate;
+}
+
+.assistant-mic.processing .assistant-voice-indicator i {
+  animation: assistant-processing-bar 820ms ease-in-out infinite;
+}
+
+.assistant-voice-indicator i:nth-child(2) {
+  animation-delay: 120ms !important;
+  height: 14px;
+}
+
+.assistant-voice-indicator i:nth-child(3) {
+  animation-delay: 240ms !important;
+  height: 11px;
+}
+
+.assistant-voice-indicator i:nth-child(4) {
+  animation-delay: 360ms !important;
+  height: 6px;
 }
 
 .assistant-send {
-  background: linear-gradient(145deg, #7b65f3, #5c45df);
+  background: #212121;
   color: #fff;
-  font-size: 23px;
-  font-weight: 500;
-  line-height: 1;
+  box-shadow: none;
 }
 
 .assistant-send:hover:not(:disabled) {
-  background: linear-gradient(145deg, #7059ec, #5038d1);
+  background: #000;
+}
+
+.assistant-send:disabled {
+  background: #d7d7d7;
+  opacity: 1;
+}
+
+.assistant-send svg {
+  height: 19px;
+  width: 19px;
 }
 
 @keyframes assistant-bounce {
@@ -751,10 +872,54 @@ select {
 @keyframes assistant-pulse {
   0%,
   100% {
-    box-shadow: 0 0 0 0 rgb(173 51 40 / 20%);
+    box-shadow: 0 0 0 0 rgb(33 33 33 / 20%);
   }
   50% {
-    box-shadow: 0 0 0 6px rgb(173 51 40 / 0%);
+    box-shadow: 0 0 0 6px rgb(33 33 33 / 0%);
+  }
+}
+
+@keyframes assistant-listening-bar {
+  from {
+    transform: scaleY(0.45);
+  }
+  to {
+    transform: scaleY(1.05);
+  }
+}
+
+@keyframes assistant-processing-bar {
+  0%,
+  100% {
+    opacity: 0.3;
+    transform: scaleY(0.55);
+  }
+  50% {
+    opacity: 1;
+    transform: scaleY(1);
+  }
+}
+
+@keyframes assistant-voice-reply-pulse {
+  0%,
+  100% {
+    opacity: 0.45;
+    transform: scale(0.88);
+  }
+  50% {
+    opacity: 1;
+    transform: scale(1.06);
+  }
+}
+
+@keyframes assistant-voice-reply-ring {
+  from {
+    opacity: 0.8;
+    transform: scale(0.88);
+  }
+  to {
+    opacity: 0;
+    transform: scale(1.15);
   }
 }
 
@@ -863,12 +1028,18 @@ select {
     border-radius: 0;
     bottom: 0;
     height: 100dvh;
+    max-width: 100%;
     right: 0;
-    width: 100vw;
+    width: 100%;
   }
 
   .assistant-header {
+    gap: 8px;
     padding-top: max(13px, env(safe-area-inset-top));
+  }
+
+  .assistant-workspace-select {
+    max-width: 135px;
   }
 
   .assistant-status {
@@ -876,7 +1047,9 @@ select {
   }
 
   .assistant-composer {
-    padding-bottom: max(12px, env(safe-area-inset-bottom));
+    margin-bottom: max(12px, env(safe-area-inset-bottom));
+    min-width: 0;
+    padding-bottom: 6px;
   }
 
   .assistant-voice-stage {
@@ -889,6 +1062,10 @@ select {
   .assistant-panel,
   .assistant-typing span,
   .assistant-mic.listening,
+  .assistant-mic.listening .assistant-voice-indicator i,
+  .assistant-mic.processing .assistant-voice-indicator i,
+  .assistant-header-voice.loading svg,
+  .assistant-header-voice.playing::after,
   .assistant-message-row.response-enter,
   .assistant-response-word,
   .assistant-response::after,
