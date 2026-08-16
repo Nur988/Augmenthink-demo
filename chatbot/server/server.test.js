@@ -87,16 +87,22 @@ test("gateway serves a widget-only preview and widget assets", async (t) => {
   assert.match(widgetScript, /searchParams\.set\("part"/);
   assert.doesNotMatch(widgetScript, /assistant-sources|createSources/);
   assert.doesNotMatch(widgetScript, /assistant-suggestions|Try asking|greeting:/);
-  assert.match(widgetScript, /What would you like to know/);
+  assert.match(widgetScript, /What would you like to know\?/);
+  assert.match(
+    widgetScript,
+    /Hi welcome to Creart Digital Media\. My name is Leo, how can I help you today\?/,
+  );
+  assert.match(widgetScript, /Ask AugmenThink: You're connected with Leo/);
+  assert.doesNotMatch(widgetScript, /SUGGESTED_QUESTIONS|assistant-question-card/);
   assert.doesNotMatch(widgetScript, /Knowledge assistant/);
   assert.match(widgetScript, /Creart Digital Media/);
   assert.match(widgetScript, /RaiseWisely/);
   assert.match(widgetScript, /Mirror XR/);
-  assert.match(widgetScript, /assets\/aug-logo\.png/);
+  assert.match(widgetScript, /assets\/aug-blue-logo\.png/);
   assert.doesNotMatch(widgetScript, /assets\/CLEO\.jpg/);
   assert.match(widgetScript, /widget-cache/);
 
-  const logoResponse = await fetch(`${gateway.url}/assets/aug-logo.png`);
+  const logoResponse = await fetch(`${gateway.url}/assets/aug-blue-logo.png`);
   assert.equal(logoResponse.status, 200);
   assert.match(logoResponse.headers.get("content-type"), /image\/png/);
   assert.match(logoResponse.headers.get("cache-control"), /no-store/);

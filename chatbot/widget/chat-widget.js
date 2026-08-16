@@ -23,7 +23,7 @@
     : "augmenthink";
   const scriptUrl = new URL(script.src, window.location.href);
   const assetCacheKey = Date.now().toString(36);
-  const avatarUrl = new URL("assets/aug-logo.png", scriptUrl);
+  const avatarUrl = new URL("assets/aug-blue-logo.png", scriptUrl);
   avatarUrl.search = scriptUrl.search;
   avatarUrl.searchParams.set("widget-cache", assetCacheKey);
   const apiUrl = (script.dataset.apiUrl || scriptUrl.origin).replace(/\/$/, "");
@@ -197,7 +197,7 @@
   const eyebrow = createElement(
     "span",
     "assistant-eyebrow",
-    "What would you like to know",
+    "What would you like to know?",
   );
   const workspaceSelect = createElement("select", "assistant-workspace-select");
   workspaceSelect.setAttribute("aria-label", "Choose a workspace");
@@ -304,6 +304,7 @@
   }
 
   function addMessage(kind, text, options = {}) {
+    messages.querySelector(".assistant-empty-state")?.remove();
     const row = createElement("div", `assistant-message-row ${kind}`);
     const bubble = createElement("div", "assistant-message", text);
     row.appendChild(bubble);
@@ -367,7 +368,28 @@
 
   function renderConversation() {
     messages.replaceChildren();
-    input.placeholder = `Message ${WORKSPACES[workspace].label}…`;
+    input.placeholder =
+      workspace === "augmenthink"
+        ? "Ask AugmenThink: You're connected with Leo"
+        : `Message ${WORKSPACES[workspace].label}…`;
+    if (histories[workspace].length === 0) {
+      const placeholder = createElement("div", "assistant-empty-state");
+      const phraseCards = createElement("div", "assistant-placeholder-cards");
+      phraseCards.append(
+        createElement(
+          "p",
+          "assistant-placeholder-card assistant-empty-greeting",
+          "Hi welcome to Creart Digital Media. My name is Leo, how can I help you today?",
+        ),
+        createElement(
+          "p",
+          "assistant-placeholder-card assistant-empty-question",
+          "What would you like to know?",
+        ),
+      );
+      placeholder.appendChild(phraseCards);
+      messages.appendChild(placeholder);
+    }
     histories[workspace].forEach(({ kind, text }) => {
       addMessage(kind, text, { persist: false });
     });
