@@ -139,12 +139,12 @@ Browser MediaRecorder + silence detection
   -> AnythingLLM workspace chat
   -> text response in the chat window
   -> when spoken replies are enabled: short-lived speech ID
-  -> GET /api/speech/:speechId
+  -> GET /api/speech/:speechId?part=0, part=1, ...
   -> OpenAI text-to-speech
   -> audio playback in the browser
 ```
 
-The display formatter removes Markdown artifacts while preserving the full answer, including plain-text code content. The UI includes microphone permission handling, automatic silence stop after a natural two-second pause, a three-minute recording ceiling, request timeouts, tap-to-stop controls, visible loading/playback states on the speaker button, mobile audio unlocking, and an explicit playback fallback when autoplay is restricted. Long spoken replies are split into API-safe chunks and played as one response. Chat messages, session IDs, and the spoken-reply preference are stored in browser local storage.
+The display formatter removes Markdown artifacts while preserving the full answer, including plain-text code content. The UI includes microphone permission handling, automatic silence stop after a natural two-second pause, a three-minute recording ceiling, request timeouts, tap-to-stop controls, visible loading/playback states on the speaker button, mobile audio unlocking, and an explicit playback fallback when autoplay is restricted. Long spoken replies are split into API-safe audio parts and played sequentially as one complete response. Chat messages, session IDs, and the spoken-reply preference are stored in browser local storage.
 
 ## API behavior
 
@@ -166,6 +166,7 @@ Successful responses are normalized to:
   "success": true,
   "message": "Assistant response",
   "speechId": "short-lived-id-present-for-voice-turns",
+  "speechPartCount": 1,
   "sources": [
     {
       "title": "Knowledge source",
@@ -178,7 +179,7 @@ Successful responses are normalized to:
 
 `GET /api/readiness` verifies that the AnythingLLM key works, confirms all four mapped workspaces are available, and reports whether the server-only OpenAI voice key is configured. It does not make a billable OpenAI request. It returns HTTP 200 when the complete chat-and-voice gateway is ready and HTTP 503 when configuration needs attention.
 
-`POST /api/transcribe?workspace=augmenthink` accepts a raw `audio/webm`, `audio/mp4`, `audio/mpeg`, `audio/ogg`, or `audio/wav` body and returns `{ "success": true, "text": "..." }`. It sends the selected workspace name and portfolio vocabulary as transcription context. `GET /api/speech/:speechId?sessionId=...` streams `audio/mpeg`; speech IDs expire after two minutes and are bound to the originating browser session.
+`POST /api/transcribe?workspace=augmenthink` accepts a raw `audio/webm`, `audio/mp4`, `audio/mpeg`, `audio/ogg`, or `audio/wav` body and returns `{ "success": true, "text": "..." }`. It sends the selected workspace name and portfolio vocabulary as transcription context. `GET /api/speech/:speechId?sessionId=...&part=0` streams one playable `audio/mpeg` part; the widget advances through every part reported by `speechPartCount`. Speech IDs are bound to the originating browser session and expire after 30 minutes of inactivity.
 
 The gateway limits JSON bodies to 32 KB, recordings to 24 MB, messages to 8,000 characters, and each client IP to 60 chat requests or 40 voice requests per 15 minutes. AnythingLLM requests time out after 30 seconds and OpenAI audio requests after three minutes.
 

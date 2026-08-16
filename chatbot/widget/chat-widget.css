@@ -36,8 +36,8 @@ select {
 
 .assistant-launcher {
   align-items: center;
-  background: linear-gradient(145deg, #8b77ff, #5b40e6);
-  border: 1px solid rgb(255 255 255 / 28%);
+  background: transparent;
+  border: 0;
   border-radius: 19px;
   bottom: max(24px, env(safe-area-inset-bottom));
   box-shadow: 0 18px 40px rgb(56 40 150 / 32%);
@@ -79,11 +79,10 @@ select {
 }
 
 .assistant-launcher-mark {
-  font-family: Georgia, "Times New Roman", serif;
-  font-size: 27px;
-  font-style: italic;
-  font-weight: 700;
-  line-height: 1;
+  display: block;
+  height: 56px;
+  object-fit: contain;
+  width: 56px;
 }
 
 .assistant-launcher-pulse {
@@ -150,14 +149,15 @@ select {
 }
 
 .assistant-avatar {
-  background: #fff;
-  border: 1px solid rgb(255 255 255 / 20%);
+  background: transparent;
+  border: 0;
   border-radius: 13px;
   display: block;
   flex: 0 0 43px;
   height: 43px;
-  object-fit: cover;
+  object-fit: contain;
   object-position: center;
+  padding: 0;
   width: 43px;
 }
 

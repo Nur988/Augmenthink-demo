@@ -23,7 +23,7 @@
     : "augmenthink";
   const scriptUrl = new URL(script.src, window.location.href);
   const assetCacheKey = Date.now().toString(36);
-  const avatarUrl = new URL("assets/CLEO.jpg", scriptUrl);
+  const avatarUrl = new URL("assets/au_logo.png", scriptUrl);
   avatarUrl.search = scriptUrl.search;
   avatarUrl.searchParams.set("widget-cache", assetCacheKey);
   const apiUrl = (script.dataset.apiUrl || scriptUrl.origin).replace(/\/$/, "");
@@ -174,7 +174,11 @@
   launcher.type = "button";
   launcher.setAttribute("aria-label", "Open knowledge assistant");
   launcher.setAttribute("aria-expanded", "false");
-  launcher.appendChild(createElement("span", "assistant-launcher-mark", "A"));
+  const launcherLogo = createElement("img", "assistant-launcher-mark");
+  launcherLogo.src = avatarUrl.href;
+  launcherLogo.alt = "";
+  launcherLogo.setAttribute("aria-hidden", "true");
+  launcher.appendChild(launcherLogo);
   const launcherPulse = createElement("span", "assistant-launcher-pulse");
   launcherPulse.setAttribute("aria-hidden", "true");
   launcher.appendChild(launcherPulse);
@@ -274,12 +278,29 @@
   let audioUnlockPromise = null;
   let playbackTimeout = 0;
   let playbackGeneration = 0;
+  let latestScrollFrame = 0;
+  let latestScrollSettledFrame = 0;
   const mediaCaptureSupported = Boolean(
     navigator.mediaDevices?.getUserMedia && window.MediaRecorder,
   );
 
   function scrollToLatest() {
-    messages.scrollTop = messages.scrollHeight;
+    const applyLatestScroll = () => {
+      messages.scrollTop = messages.scrollHeight;
+    };
+    applyLatestScroll();
+    if (latestScrollFrame) window.cancelAnimationFrame(latestScrollFrame);
+    if (latestScrollSettledFrame) {
+      window.cancelAnimationFrame(latestScrollSettledFrame);
+    }
+    latestScrollFrame = window.requestAnimationFrame(() => {
+      latestScrollFrame = 0;
+      applyLatestScroll();
+      latestScrollSettledFrame = window.requestAnimationFrame(() => {
+        latestScrollSettledFrame = 0;
+        applyLatestScroll();
+      });
+    });
   }
 
   function addMessage(kind, text, options = {}) {
@@ -419,7 +440,7 @@
     else updateVoiceReplyButton();
   }
 
-  function showPlaybackFallback(responseRow, speechId) {
+  function showPlaybackFallback(responseRow, speechId, speechPartCount = 1) {
     if (!responseRow || !responseRow.isConnected) return;
     let button = responseRow.querySelector(".assistant-play-reply");
     if (button) {
@@ -434,25 +455,29 @@
     button.append(speakerIcon(), createElement("span", "", "Play voice reply"));
     button.setAttribute("aria-label", "Play this voice reply");
     button.addEventListener("click", () => {
-      void playSpeech(speechId, responseRow, button);
+      void playSpeech(speechId, responseRow, button, speechPartCount);
     });
     responseRow.appendChild(button);
     scrollToLatest();
   }
 
-  async function playSpeech(speechId, responseRow, playbackButton = null) {
+  async function playSpeech(
+    speechId,
+    responseRow,
+    playbackButton = null,
+    speechPartCount = 1,
+  ) {
     if (!voiceRepliesEnabled || typeof speechId !== "string") return;
     stopAudioPlayback();
     const generation = playbackGeneration;
-    const speechUrl = new URL(
-      `${apiUrl}/api/speech/${encodeURIComponent(speechId)}`,
-    );
-    speechUrl.searchParams.set("sessionId", sessionId);
+    const partCount =
+      Number.isInteger(speechPartCount) && speechPartCount > 0
+        ? speechPartCount
+        : 1;
     const player = responseAudio;
     voiceReplyButton.classList.add("loading");
     voiceReplyButton.title = "Preparing spoken reply";
     player.preload = "auto";
-    player.src = speechUrl.href;
 
     const finish = () => {
       if (generation !== playbackGeneration) return;
@@ -471,7 +496,7 @@
       if (failed || generation !== playbackGeneration) return;
       failed = true;
       finish();
-      showPlaybackFallback(responseRow, speechId);
+      showPlaybackFallback(responseRow, speechId, partCount);
     };
     player.onplaying = () => {
       if (generation !== playbackGeneration) return;
@@ -486,19 +511,38 @@
         playbackButton.querySelector("span").textContent = "Playing voice reply";
       }
     };
-    player.onended = finish;
-    player.onerror = offerFallback;
-    playbackTimeout = window.setTimeout(() => {
+    const playPart = async (partIndex) => {
+      if (failed || generation !== playbackGeneration) return;
+      const speechUrl = new URL(
+        `${apiUrl}/api/speech/${encodeURIComponent(speechId)}`,
+      );
+      speechUrl.searchParams.set("sessionId", sessionId);
+      speechUrl.searchParams.set("part", String(partIndex));
+      player.src = speechUrl.href;
+      window.clearTimeout(playbackTimeout);
+      playbackTimeout = window.setTimeout(() => {
+        if (generation !== playbackGeneration) return;
+        offerFallback();
+      }, AUDIO_REQUEST_TIMEOUT_MS);
+      try {
+        player.load();
+        await player.play();
+      } catch (_error) {
+        offerFallback();
+      }
+    };
+    let currentPart = 0;
+    player.onended = () => {
       if (generation !== playbackGeneration) return;
-      offerFallback();
-    }, AUDIO_REQUEST_TIMEOUT_MS);
-
-    try {
-      player.load();
-      await player.play();
-    } catch (_error) {
-      offerFallback();
-    }
+      if (currentPart + 1 >= partCount) {
+        finish();
+        return;
+      }
+      currentPart += 1;
+      void playPart(currentPart);
+    };
+    player.onerror = offerFallback;
+    await playPart(currentPart);
   }
 
   function resetRecordingControls() {
@@ -785,7 +829,11 @@
     panel.setAttribute("aria-hidden", String(!open));
     launcher.setAttribute("aria-expanded", String(open));
     if (open) {
-      window.setTimeout(() => input.focus(), 150);
+      scrollToLatest();
+      window.setTimeout(() => {
+        input.focus();
+        scrollToLatest();
+      }, 150);
     } else {
       stopAudioPlayback();
       if (mediaRecorder?.state === "recording" || capturePending) {
@@ -901,7 +949,12 @@
       typing.remove();
       const responseRow = addAnimatedResponse(payload.message);
       if (shouldSpeak && typeof payload.speechId === "string") {
-        void playSpeech(payload.speechId, responseRow);
+        void playSpeech(
+          payload.speechId,
+          responseRow,
+          null,
+          payload.speechPartCount,
+        );
       }
     } catch (error) {
       typing.remove();
@@ -946,6 +999,9 @@
     setWorkspace(workspaceSelect.value);
   });
   input.addEventListener("input", resizeInput);
+  input.addEventListener("focus", () => {
+    window.setTimeout(scrollToLatest, 100);
+  });
   input.addEventListener("keydown", (event) => {
     if (event.key === "Enter" && !event.shiftKey) {
       event.preventDefault();
@@ -964,6 +1020,11 @@
       setOpen(false);
     }
   });
+  const keepLatestVisible = () => {
+    if (panel.classList.contains("open")) scrollToLatest();
+  };
+  window.addEventListener("resize", keepLatestVisible);
+  window.visualViewport?.addEventListener("resize", keepLatestVisible);
 
   renderConversation();
   updateVoiceReplyButton();

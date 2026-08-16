@@ -77,10 +77,14 @@ test("gateway serves a widget-only preview and widget assets", async (t) => {
   assert.match(widgetScript, /MAX_RECORDING_MS = 180000/);
   assert.match(widgetScript, /SILENCE_STOP_MS = 2000/);
   assert.match(widgetScript, /input\.maxLength = 8000/);
+  assert.match(widgetScript, /latestScrollSettledFrame/);
+  assert.match(widgetScript, /visualViewport\?\.addEventListener\("resize"/);
   assert.doesNotMatch(widgetScript, /const player = new Audio/);
   assert.match(widgetScript, /await sendMessage\(\{ fromVoice: true \}\)/);
   assert.doesNotMatch(widgetScript, /assistant-mode-switch|assistant:set-mode/);
   assert.match(widgetScript, /api\/speech/);
+  assert.match(widgetScript, /speechPartCount/);
+  assert.match(widgetScript, /searchParams\.set\("part"/);
   assert.doesNotMatch(widgetScript, /assistant-sources|createSources/);
   assert.doesNotMatch(widgetScript, /assistant-suggestions|Try asking|greeting:/);
   assert.match(widgetScript, /What would you like to know/);
@@ -88,12 +92,13 @@ test("gateway serves a widget-only preview and widget assets", async (t) => {
   assert.match(widgetScript, /Creart Digital Media/);
   assert.match(widgetScript, /RaiseWisely/);
   assert.match(widgetScript, /Mirror XR/);
-  assert.match(widgetScript, /assets\/CLEO\.jpg/);
+  assert.match(widgetScript, /assets\/au_logo\.png/);
+  assert.doesNotMatch(widgetScript, /assets\/CLEO\.jpg/);
   assert.match(widgetScript, /widget-cache/);
 
-  const logoResponse = await fetch(`${gateway.url}/assets/CLEO.jpg`);
+  const logoResponse = await fetch(`${gateway.url}/assets/au_logo.png`);
   assert.equal(logoResponse.status, 200);
-  assert.match(logoResponse.headers.get("content-type"), /image\/jpeg/);
+  assert.match(logoResponse.headers.get("content-type"), /image\/png/);
   assert.match(logoResponse.headers.get("cache-control"), /no-store/);
   assert.ok((await logoResponse.arrayBuffer()).byteLength > 0);
 });
@@ -460,6 +465,7 @@ test("speech endpoint streams cached speech-safe text as audio", async (t) => {
     "Update ✨\n• Read the brief.\n• Run secret_code() now.",
   );
   assert.match(chatPayload.speechId, /^[0-9a-f-]{36}$/);
+  assert.equal(chatPayload.speechPartCount, 1);
 
   const response = await fetch(
     `${gateway.url}/api/speech/${chatPayload.speechId}?sessionId=session-voice-1`,
@@ -468,6 +474,8 @@ test("speech endpoint streams cached speech-safe text as audio", async (t) => {
   assert.equal(response.status, 200);
   assert.equal(response.headers.get("content-type"), "audio/mpeg");
   assert.equal(response.headers.get("content-length"), null);
+  assert.equal(response.headers.get("x-speech-part"), "0");
+  assert.equal(response.headers.get("x-speech-part-count"), "1");
   assert.deepEqual(Buffer.from(await response.arrayBuffer()), audio);
   assert.equal(upstreamRequest.url, "https://openai.test/v1/audio/speech");
   assert.equal(
@@ -486,6 +494,59 @@ test("speech endpoint streams cached speech-safe text as audio", async (t) => {
   assert.match(body.instructions, /\+1\.6 pitch adjustment/i);
   assert.equal(body.speed, 1.2);
   assert.equal(body.response_format, "mp3");
+});
+
+test("long speech replies are served as separately playable audio parts", async (t) => {
+  const spokenInputs = [];
+  const longReply = `${"A complete opening sentence. ".repeat(130)}${
+    "A complete closing sentence. ".repeat(40)
+  }`.trim();
+  const gateway = await startTestServer({
+    anythingLlmApiKey: "anything-server-secret",
+    openAiApiKey: "openai-server-secret",
+    openAiBaseUrl: "https://openai.test/v1",
+    fetchImpl: async (url, options) => {
+      if (url.includes("/api/v1/workspace/")) {
+        return Response.json({ textResponse: longReply });
+      }
+      const body = JSON.parse(options.body);
+      spokenInputs.push(body.input);
+      return new Response(Buffer.from([0x49, 0x44, 0x33, spokenInputs.length]), {
+        status: 200,
+        headers: { "Content-Type": "audio/mpeg" },
+      });
+    },
+  });
+  t.after(() => gateway.server.close());
+
+  const chatResponse = await postChat(gateway.url, {
+    message: "Give me the full response",
+    workspace: "augmenthink",
+    sessionId: "session-long-voice",
+    voice: true,
+  });
+  const chatPayload = await chatResponse.json();
+  assert.equal(chatResponse.status, 200);
+  assert.ok(chatPayload.speechPartCount > 1);
+
+  for (let part = 0; part < chatPayload.speechPartCount; part += 1) {
+    const response = await fetch(
+      `${gateway.url}/api/speech/${chatPayload.speechId}?sessionId=session-long-voice&part=${part}`,
+    );
+    assert.equal(response.status, 200);
+    assert.equal(response.headers.get("x-speech-part"), String(part));
+    assert.equal(
+      response.headers.get("x-speech-part-count"),
+      String(chatPayload.speechPartCount),
+    );
+    assert.deepEqual(
+      Buffer.from(await response.arrayBuffer()),
+      Buffer.from([0x49, 0x44, 0x33, part + 1]),
+    );
+  }
+
+  assert.equal(spokenInputs.length, chatPayload.speechPartCount);
+  assert.equal(spokenInputs.join(" "), chatPayload.message);
 });
 
 test("voice endpoints require a server-side OpenAI key", async (t) => {
