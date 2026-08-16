@@ -368,9 +368,9 @@ function createApp(options = {}) {
     setNoCacheHeaders(response);
     response.sendFile(path.join(widgetDirectory, "chat-widget.css"));
   });
-  app.get("/assets/au_logo.png", (_request, response) => {
+  app.get("/assets/aug-logo.png", (_request, response) => {
     setNoCacheHeaders(response);
-    response.sendFile(path.join(assetsDirectory, "au_logo.png"));
+    response.sendFile(path.join(assetsDirectory, "aug-logo.png"));
   });
 
   app.get("/api/readiness", async (_request, response) => {

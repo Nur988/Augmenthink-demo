@@ -23,7 +23,7 @@
     : "augmenthink";
   const scriptUrl = new URL(script.src, window.location.href);
   const assetCacheKey = Date.now().toString(36);
-  const avatarUrl = new URL("assets/au_logo.png", scriptUrl);
+  const avatarUrl = new URL("assets/aug-logo.png", scriptUrl);
   avatarUrl.search = scriptUrl.search;
   avatarUrl.searchParams.set("widget-cache", assetCacheKey);
   const apiUrl = (script.dataset.apiUrl || scriptUrl.origin).replace(/\/$/, "");

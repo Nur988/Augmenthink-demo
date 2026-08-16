@@ -36,21 +36,22 @@ select {
 
 .assistant-launcher {
   align-items: center;
-  background: transparent;
-  border: 0;
-  border-radius: 19px;
+  background: #17112f;
+  border: 2px solid rgb(143 122 255 / 58%);
+  border-radius: 22px;
   bottom: max(24px, env(safe-area-inset-bottom));
   box-shadow: 0 18px 40px rgb(56 40 150 / 32%);
   color: #fff;
   cursor: pointer;
   display: flex;
-  height: 62px;
+  height: 68px;
   justify-content: center;
+  overflow: hidden;
   padding: 0;
   position: fixed;
   right: 24px;
   transition: box-shadow 160ms ease, opacity 160ms ease, transform 160ms ease;
-  width: 62px;
+  width: 68px;
   z-index: 2147483000;
 }
 
@@ -80,9 +81,10 @@ select {
 
 .assistant-launcher-mark {
   display: block;
-  height: 56px;
-  object-fit: contain;
-  width: 56px;
+  border-radius: 18px;
+  height: 64px;
+  object-fit: cover;
+  width: 64px;
 }
 
 .assistant-launcher-pulse {
@@ -149,16 +151,16 @@ select {
 }
 
 .assistant-avatar {
-  background: transparent;
-  border: 0;
-  border-radius: 13px;
+  background: #17112f;
+  border: 1px solid rgb(163 145 255 / 55%);
+  border-radius: 15px;
   display: block;
-  flex: 0 0 43px;
-  height: 43px;
-  object-fit: contain;
+  flex: 0 0 48px;
+  height: 48px;
+  object-fit: cover;
   object-position: center;
   padding: 0;
-  width: 43px;
+  width: 48px;
 }
 
 .assistant-title-group {
@@ -1008,11 +1010,17 @@ select {
 
 @media (max-width: 520px) {
   .assistant-launcher {
-    border-radius: 18px;
+    border-radius: 20px;
     bottom: max(14px, env(safe-area-inset-bottom));
-    height: 58px;
+    height: 64px;
     right: max(14px, env(safe-area-inset-right));
-    width: 58px;
+    width: 64px;
+  }
+
+  .assistant-launcher-mark {
+    border-radius: 16px;
+    height: 60px;
+    width: 60px;
   }
 
   .assistant-panel {
@@ -1050,11 +1058,10 @@ select {
   }
 
   .assistant-avatar {
-    border-radius: 11px;
-    flex-basis: 38px;
-    font-size: 17px;
-    height: 38px;
-    width: 38px;
+    border-radius: 13px;
+    flex-basis: 42px;
+    height: 42px;
+    width: 42px;
   }
 
   .assistant-title-group {
@@ -1153,9 +1160,9 @@ select {
   }
 
   .assistant-avatar {
-    flex-basis: 36px;
-    height: 36px;
-    width: 36px;
+    flex-basis: 40px;
+    height: 40px;
+    width: 40px;
   }
 
   .assistant-header-voice,
@@ -1185,9 +1192,9 @@ select {
   }
 
   .assistant-avatar {
-    flex-basis: 36px;
-    height: 36px;
-    width: 36px;
+    flex-basis: 40px;
+    height: 40px;
+    width: 40px;
   }
 
   .assistant-messages {
