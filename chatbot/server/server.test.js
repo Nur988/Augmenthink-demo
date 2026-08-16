@@ -98,11 +98,13 @@ test("gateway serves a widget-only preview and widget assets", async (t) => {
   assert.match(widgetScript, /Creart Digital Media/);
   assert.match(widgetScript, /RaiseWisely/);
   assert.match(widgetScript, /Mirror XR/);
-  assert.match(widgetScript, /assets\/aug-blue-logo\.png/);
+  assert.match(widgetScript, /assets\/aug-blue-logo-transparent\.png/);
   assert.doesNotMatch(widgetScript, /assets\/CLEO\.jpg/);
   assert.match(widgetScript, /widget-cache/);
 
-  const logoResponse = await fetch(`${gateway.url}/assets/aug-blue-logo.png`);
+  const logoResponse = await fetch(
+    `${gateway.url}/assets/aug-blue-logo-transparent.png`,
+  );
   assert.equal(logoResponse.status, 200);
   assert.match(logoResponse.headers.get("content-type"), /image\/png/);
   assert.match(logoResponse.headers.get("cache-control"), /no-store/);
