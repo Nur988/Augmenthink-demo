@@ -8,11 +8,14 @@ const {
   formatDisplayText,
   formatSpeechText,
   getAssistantSources,
+  parseFirebaseServiceAccount,
   splitSpeechText,
 } = require("./server");
 
 async function startTestServer(options = {}) {
-  const server = http.createServer(createApp(options));
+  const server = http.createServer(
+    createApp({ firebaseServiceAccountBase64: "", ...options }),
+  );
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
   const address = server.address();
@@ -77,6 +80,7 @@ test("gateway serves a widget-only preview and widget assets", async (t) => {
   assert.match(widgetScript, /MAX_RECORDING_MS = 180000/);
   assert.match(widgetScript, /SILENCE_STOP_MS = 2000/);
   assert.match(widgetScript, /input\.maxLength = 8000/);
+  assert.match(widgetScript, /inputMode: options\.fromVoice/);
   assert.match(widgetScript, /latestScrollSettledFrame/);
   assert.match(widgetScript, /visualViewport\?\.addEventListener\("resize"/);
   assert.doesNotMatch(widgetScript, /const player = new Audio/);
@@ -148,6 +152,11 @@ test("readiness confirms API access and required workspaces", async (t) => {
       ttsModel: "gpt-4o-mini-tts",
       ttsVoice: "cedar",
     },
+    chatLogging: {
+      configured: false,
+      projectId: "augmenthink-da691",
+      collection: "chat_logs",
+    },
     workspaces: {
       clevart: true,
       augmenthink: true,
@@ -191,6 +200,18 @@ test("chat endpoint validates empty messages and session IDs", async (t) => {
     sessionId: "session id with spaces",
   });
   assert.equal(invalidSession.status, 400);
+
+  const invalidInputMode = await postChat(gateway.url, {
+    message: "Hello",
+    workspace: "augmenthink",
+    sessionId: "session-1",
+    inputMode: "telephone",
+  });
+  assert.equal(invalidInputMode.status, 400);
+  assert.equal(
+    (await invalidInputMode.json()).error,
+    "Input mode must be text or voice.",
+  );
 });
 
 test("chat endpoint enforces the configured browser origin", async (t) => {
@@ -215,9 +236,11 @@ test("chat endpoint enforces the configured browser origin", async (t) => {
 
 test("chat endpoint sends agent mode, maps workspace, and normalizes the response", async (t) => {
   let upstreamRequest;
+  const chatEntries = [];
   const gateway = await startTestServer({
     anythingLlmUrl: "http://anythingllm.internal:3001",
     anythingLlmApiKey: "server-only-secret",
+    chatLogger: async (entry) => chatEntries.push(entry),
     fetchImpl: async (url, options) => {
       upstreamRequest = { url, options };
       return new Response(JSON.stringify({ textResponse: "  Hello from AI  " }), {
@@ -232,6 +255,7 @@ test("chat endpoint sends agent mode, maps workspace, and normalizes the respons
     message: "  Hello  ",
     workspace: "mirrorxr",
     sessionId: "session-1",
+    inputMode: "voice",
   });
 
   assert.equal(response.status, 200);
@@ -253,6 +277,57 @@ test("chat endpoint sends agent mode, maps workspace, and normalizes the respons
     mode: "chat",
     sessionId: "session-1",
   });
+  assert.equal(chatEntries.length, 2);
+  assert.match(chatEntries[0].turnId, /^[0-9a-f-]{36}$/);
+  assert.deepEqual(
+    {
+      sessionId: chatEntries[0].sessionId,
+      workspace: chatEntries[0].workspace,
+      workspaceSlug: chatEntries[0].workspaceSlug,
+      inputMode: chatEntries[0].inputMode,
+      role: chatEntries[0].role,
+      message: chatEntries[0].message,
+      status: chatEntries[0].status,
+    },
+    {
+      sessionId: "session-1",
+      workspace: "mirrorxr",
+      workspaceSlug: "mirrorxr",
+      inputMode: "voice",
+      role: "user",
+      message: "Hello",
+      status: "received",
+    },
+  );
+  assert.equal(chatEntries[1].turnId, chatEntries[0].turnId);
+  assert.equal(chatEntries[1].role, "assistant");
+  assert.equal(chatEntries[1].message, "Hello from AI");
+  assert.equal(chatEntries[1].status, "success");
+  assert.equal(chatEntries[1].spokenReplyRequested, false);
+  assert.ok(chatEntries[1].responseTimeMs >= 0);
+});
+
+test("Firebase credentials are decoded and restricted to the configured project", () => {
+  const credentials = {
+    type: "service_account",
+    project_id: "augmenthink-da691",
+    client_email: "logger@augmenthink-da691.iam.gserviceaccount.com",
+    private_key: "-----BEGIN PRIVATE KEY-----\ntest\n-----END PRIVATE KEY-----\n",
+  };
+  const encoded = Buffer.from(JSON.stringify(credentials)).toString("base64");
+
+  assert.deepEqual(
+    parseFirebaseServiceAccount(encoded, "augmenthink-da691"),
+    credentials,
+  );
+  assert.throws(
+    () => parseFirebaseServiceAccount(encoded, "another-project"),
+    /not another-project/,
+  );
+  assert.throws(
+    () => parseFirebaseServiceAccount("not-base64", "augmenthink-da691"),
+    /invalid/,
+  );
 });
 
 test("chat endpoint does not duplicate an existing agent trigger", async (t) => {
@@ -310,8 +385,10 @@ test("source normalization keeps display text and safe web links", () => {
 });
 
 test("chat endpoint rejects malformed upstream responses", async (t) => {
+  const chatEntries = [];
   const gateway = await startTestServer({
     anythingLlmApiKey: "test-key",
+    chatLogger: async (entry) => chatEntries.push(entry),
     fetchImpl: async () =>
       new Response("not-json", {
         status: 200,
@@ -328,6 +405,15 @@ test("chat endpoint rejects malformed upstream responses", async (t) => {
 
   assert.equal(response.status, 502);
   assert.equal((await response.json()).success, false);
+  assert.deepEqual(
+    chatEntries.map(({ role, status }) => ({ role, status })),
+    [
+      { role: "user", status: "received" },
+      { role: "error", status: "error" },
+    ],
+  );
+  assert.equal(chatEntries[1].httpStatus, 502);
+  assert.equal(chatEntries[1].turnId, chatEntries[0].turnId);
 });
 
 test("speech formatter stays aligned with the displayed response", () => {

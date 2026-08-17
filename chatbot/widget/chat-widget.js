@@ -953,6 +953,7 @@
           workspace,
           sessionId,
           voice: shouldSpeak,
+          inputMode: options.fromVoice === true ? "voice" : "text",
         }),
         signal: controller.signal,
       });

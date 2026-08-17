@@ -6,6 +6,8 @@ const { Readable } = require("node:stream");
 const cors = require("cors");
 const dotenv = require("dotenv");
 const express = require("express");
+const { cert, getApps, initializeApp } = require("firebase-admin/app");
+const { FieldValue, getFirestore } = require("firebase-admin/firestore");
 const { rateLimit } = require("express-rate-limit");
 
 dotenv.config();
@@ -18,6 +20,8 @@ const UPSTREAM_TIMEOUT_MS = 30000;
 const OPENAI_AUDIO_TIMEOUT_MS = 180000;
 const SPEECH_CACHE_TTL_MS = 30 * 60 * 1000;
 const MAX_SPEECH_CACHE_ENTRIES = 200;
+const DEFAULT_FIREBASE_PROJECT_ID = "augmenthink-da691";
+const DEFAULT_FIREBASE_CHAT_COLLECTION = "chat_logs";
 
 const AUDIO_FILE_EXTENSIONS = Object.freeze({
   "audio/mp4": "m4a",
@@ -39,6 +43,66 @@ const WORKSPACES = Object.freeze({
 
 function normalizeOrigin(value) {
   return value ? value.trim().replace(/\/$/, "") : "";
+}
+
+function parseFirebaseServiceAccount(encodedCredentials, expectedProjectId = "") {
+  if (!encodedCredentials) return null;
+
+  let serviceAccount;
+  try {
+    serviceAccount = JSON.parse(
+      Buffer.from(encodedCredentials, "base64").toString("utf8"),
+    );
+  } catch (_error) {
+    throw new Error("FIREBASE_SERVICE_ACCOUNT_BASE64 is invalid.");
+  }
+
+  if (
+    serviceAccount?.type !== "service_account" ||
+    typeof serviceAccount.project_id !== "string" ||
+    typeof serviceAccount.client_email !== "string" ||
+    typeof serviceAccount.private_key !== "string"
+  ) {
+    throw new Error("Firebase service-account credentials are incomplete.");
+  }
+  if (expectedProjectId && serviceAccount.project_id !== expectedProjectId) {
+    throw new Error(
+      `Firebase credentials are for ${serviceAccount.project_id}, not ${expectedProjectId}.`,
+    );
+  }
+  return serviceAccount;
+}
+
+function createFirebaseChatLogger(options = {}) {
+  const serviceAccount = parseFirebaseServiceAccount(
+    options.encodedCredentials,
+    options.projectId,
+  );
+  if (!serviceAccount) return null;
+
+  const collectionName =
+    typeof options.collectionName === "string" &&
+    /^[A-Za-z0-9_-]{1,100}$/.test(options.collectionName)
+      ? options.collectionName
+      : DEFAULT_FIREBASE_CHAT_COLLECTION;
+  const appName = `chat-logs-${serviceAccount.project_id}`;
+  const firebaseApp =
+    getApps().find((app) => app.name === appName) ||
+    initializeApp(
+      {
+        credential: cert(serviceAccount),
+        projectId: serviceAccount.project_id,
+      },
+      appName,
+    );
+  const firestore = getFirestore(firebaseApp);
+
+  return async (entry) => {
+    await firestore.collection(collectionName).add({
+      ...entry,
+      timestamp: FieldValue.serverTimestamp(),
+    });
+  };
 }
 
 function setNoCacheHeaders(response) {
@@ -149,6 +213,13 @@ function validateChatRequest(body) {
 
   if (body.voice !== undefined && typeof body.voice !== "boolean") {
     return "Voice must be a boolean.";
+  }
+
+  if (
+    body.inputMode !== undefined &&
+    !["text", "voice"].includes(body.inputMode)
+  ) {
+    return "Input mode must be text or voice.";
   }
 
   return null;
@@ -280,8 +351,44 @@ function createApp(options = {}) {
   const allowedOrigin = normalizeOrigin(
     options.allowedOrigin || process.env.ALLOWED_ORIGIN || "http://localhost:3000",
   );
+  const firebaseProjectId =
+    options.firebaseProjectId ||
+    process.env.FIREBASE_PROJECT_ID ||
+    DEFAULT_FIREBASE_PROJECT_ID;
+  const firebaseChatCollection =
+    options.firebaseChatCollection ||
+    process.env.FIREBASE_CHAT_COLLECTION ||
+    DEFAULT_FIREBASE_CHAT_COLLECTION;
+  const chatLogger =
+    options.chatLogger !== undefined
+      ? options.chatLogger
+      : createFirebaseChatLogger({
+          encodedCredentials:
+            options.firebaseServiceAccountBase64 ??
+            process.env.FIREBASE_SERVICE_ACCOUNT_BASE64 ??
+            "",
+          projectId: firebaseProjectId,
+          collectionName: firebaseChatCollection,
+        });
   const fetchImpl = options.fetchImpl || global.fetch;
   const speechCache = new Map();
+
+  async function logChat(entry) {
+    if (typeof chatLogger !== "function") return;
+    try {
+      await chatLogger(entry);
+    } catch (_error) {
+      console.error("Firebase chat logging failed.");
+    }
+  }
+
+  function chatLoggingReadiness() {
+    return {
+      configured: typeof chatLogger === "function",
+      projectId: firebaseProjectId,
+      collection: firebaseChatCollection,
+    };
+  }
 
   function voiceReadiness() {
     return {
@@ -381,6 +488,7 @@ function createApp(options = {}) {
         anythingLlm: false,
         apiConfigured: false,
         voice: voiceReadiness(),
+        chatLogging: chatLoggingReadiness(),
         workspaces: Object.fromEntries(
           Object.keys(WORKSPACES).map((workspace) => [workspace, false]),
         ),
@@ -413,6 +521,7 @@ function createApp(options = {}) {
         anythingLlm: true,
         apiConfigured: true,
         voice: voiceReadiness(),
+        chatLogging: chatLoggingReadiness(),
         workspaces,
       });
     } catch (_error) {
@@ -422,6 +531,7 @@ function createApp(options = {}) {
         anythingLlm: false,
         apiConfigured: true,
         voice: voiceReadiness(),
+        chatLogging: chatLoggingReadiness(),
         workspaces: Object.fromEntries(
           Object.keys(WORKSPACES).map((workspace) => [workspace, false]),
         ),
@@ -469,6 +579,32 @@ function createApp(options = {}) {
     }
 
     const workspaceSlug = WORKSPACES[request.body.workspace];
+    const turnId = randomUUID();
+    const startedAt = Date.now();
+    const inputMode = request.body.inputMode === "voice" ? "voice" : "text";
+    const logContext = {
+      turnId,
+      sessionId: request.body.sessionId,
+      workspace: request.body.workspace,
+      workspaceSlug,
+      inputMode,
+    };
+    await logChat({
+      ...logContext,
+      role: "user",
+      message: request.body.message.trim(),
+      status: "received",
+    });
+    const logChatError = async (message, httpStatus) => {
+      await logChat({
+        ...logContext,
+        role: "error",
+        message,
+        status: "error",
+        httpStatus,
+        responseTimeMs: Date.now() - startedAt,
+      });
+    };
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), UPSTREAM_TIMEOUT_MS);
 
@@ -494,6 +630,10 @@ function createApp(options = {}) {
 
       if (!upstreamResponse.ok) {
         console.error(`AnythingLLM returned HTTP ${upstreamResponse.status}.`);
+        await logChatError(
+          "The assistant could not answer right now. Please try again.",
+          502,
+        );
         response.status(502).json({
           success: false,
           error: "The assistant could not answer right now. Please try again.",
@@ -505,6 +645,10 @@ function createApp(options = {}) {
       try {
         upstreamPayload = await upstreamResponse.json();
       } catch (_error) {
+        await logChatError(
+          "The assistant returned an invalid response. Please try again.",
+          502,
+        );
         response.status(502).json({
           success: false,
           error: "The assistant returned an invalid response. Please try again.",
@@ -514,6 +658,10 @@ function createApp(options = {}) {
 
       const assistantMessage = getAssistantMessage(upstreamPayload);
       if (!assistantMessage) {
+        await logChatError(
+          "The assistant returned an invalid response. Please try again.",
+          502,
+        );
         response.status(502).json({
           success: false,
           error: "The assistant returned an invalid response. Please try again.",
@@ -528,6 +676,14 @@ function createApp(options = {}) {
       const speech = speechText
         ? cacheSpeech(speechText, request.body.sessionId)
         : null;
+      await logChat({
+        ...logContext,
+        role: "assistant",
+        message: displayText,
+        status: "success",
+        responseTimeMs: Date.now() - startedAt,
+        spokenReplyRequested: request.body.voice === true,
+      });
 
       response.json({
         success: true,
@@ -543,6 +699,12 @@ function createApp(options = {}) {
         timedOut
           ? "AnythingLLM request timed out."
           : "AnythingLLM request failed.",
+      );
+      await logChatError(
+        timedOut
+          ? "The assistant took too long to respond. Please try again."
+          : "The assistant is temporarily unavailable. Please try again.",
+        timedOut ? 504 : 502,
       );
       response.status(timedOut ? 504 : 502).json({
         success: false,
@@ -814,6 +976,7 @@ module.exports = {
   getAssistantMessage,
   getAssistantSources,
   getWorkspaceSlugs,
+  parseFirebaseServiceAccount,
   splitSpeechText,
   validateChatRequest,
 };

@@ -11,6 +11,7 @@ Webflow page
   -> OpenAI speech-to-text for microphone input
   -> OpenAI text-to-speech for optional spoken replies
   -> selected AnythingLLM workspace
+  -> Cloud Firestore chat log (backend only)
 ```
 
 Neither the AnythingLLM API key nor the OpenAI API key is sent to the browser. AnythingLLM should remain bound to localhost or a private Docker network.
@@ -65,6 +66,7 @@ The embedded widget provides:
 - An inline Play voice reply fallback when a phone blocks automatic audio playback.
 - A responsive full-screen mobile layout with safe-area spacing, touch-friendly controls, and keyboard-aware composer sizing.
 - A background readiness check backed by `GET /api/readiness`.
+- Backend-only Firestore logging for user messages, assistant replies, errors, input mode, workspace, response time, and Firebase-generated timestamps.
 
 ## Environment variables
 
@@ -78,10 +80,32 @@ The embedded widget provides:
 | `OPENAI_TTS_VOICE` | `cedar` | High-quality OpenAI voice used to approximate the reference voice |
 | `OPENAI_TTS_SPEED` | `1.2` | Speech speed multiplier; OpenAI accepts values from 0.25 to 4.0 |
 | `OPENAI_TTS_INSTRUCTIONS` | `Speak in polished British English...` | Delivery instructions approximating en-GB, a male-presenting voice, and elevated pitch |
+| `FIREBASE_PROJECT_ID` | `augmenthink-da691` | Firebase project that owns the Firestore chat log |
+| `FIREBASE_CHAT_COLLECTION` | `chat_logs` | Firestore collection used for message documents |
+| `FIREBASE_SERVICE_ACCOUNT_BASE64` | `...` | Base64-encoded Firebase service-account JSON; server only |
 | `PORT` | `3000` | Express gateway port |
 | `ALLOWED_ORIGIN` | `http://localhost:3000` | Exact browser origin allowed by CORS, without a path; use the Webflow origin in production |
 
 Do not commit `server/.env`. If Webflow uses a custom production domain, set that exact origin. A Webflow staging domain and a custom domain are two different origins; this MVP accepts one configured origin.
+
+## Firestore chat logging
+
+Create a Cloud Firestore Standard database in production mode. The browser never connects to Firebase: the Express gateway uses the Firebase Admin SDK and writes one document per user, assistant, or error message to `chat_logs`. Related user and assistant records share a `turnId`; timestamps use Firestore's server clock. Voice recordings are not stored.
+
+Keep direct client access denied in the Firestore Rules tab:
+
+```text
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
+```
+
+Encode the downloaded service-account JSON on macOS with `openssl base64 -A -in /absolute/path/to/service-account.json`, then place the resulting single line in `FIREBASE_SERVICE_ACCOUNT_BASE64` locally and in the Render environment settings. Never commit the JSON credential or paste it into browser code.
 
 ## AnythingLLM setup
 
