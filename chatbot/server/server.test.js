@@ -357,6 +357,55 @@ test("chat endpoint does not duplicate an existing agent trigger", async (t) => 
   );
 });
 
+test("chat endpoint prepends a session-scoped rolling conversation window", async (t) => {
+  const upstreamBodies = [];
+  const gateway = await startTestServer({
+    anythingLlmApiKey: "test-key",
+    fetchImpl: async (_url, options) => {
+      const body = JSON.parse(options.body);
+      upstreamBodies.push(body);
+      return Response.json({
+        textResponse: `Reply ${upstreamBodies.length}`,
+      });
+    },
+  });
+  t.after(() => gateway.server.close());
+
+  for (let index = 1; index <= 12; index += 1) {
+    const response = await postChat(gateway.url, {
+      message: `Question ${index}`,
+      workspace: "augmenthink",
+      sessionId: "rolling-session",
+    });
+    assert.equal(response.status, 200);
+  }
+
+  assert.equal(upstreamBodies[0].message, "@agent Question 1");
+  assert.equal(upstreamBodies[1].message, [
+    "@agent Recent conversation:",
+    "User: Question 1",
+    "Assistant: Reply 1",
+    "",
+    "Current user message:",
+    "Question 2",
+  ].join("\n"));
+
+  const finalPrompt = upstreamBodies.at(-1).message;
+  assert.doesNotMatch(finalPrompt, /Question 1(?:\D|$)/);
+  assert.doesNotMatch(finalPrompt, /Reply 1(?:\D|$)/);
+  assert.match(finalPrompt, /User: Question 2/);
+  assert.match(finalPrompt, /Assistant: Reply 11/);
+  assert.match(finalPrompt, /Current user message:\nQuestion 12$/);
+
+  const separateSession = await postChat(gateway.url, {
+    message: "Fresh question",
+    workspace: "augmenthink",
+    sessionId: "separate-session",
+  });
+  assert.equal(separateSession.status, 200);
+  assert.equal(upstreamBodies.at(-1).message, "@agent Fresh question");
+});
+
 test("source normalization keeps display text and safe web links", () => {
   assert.deepEqual(
     getAssistantSources({

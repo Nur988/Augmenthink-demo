@@ -14,6 +14,7 @@ dotenv.config();
 
 const DEFAULT_PORT = 3000;
 const MAX_MESSAGE_LENGTH = 8000;
+const MAX_CONVERSATION_MEMORY_MESSAGES = 20;
 const MAX_TTS_CHUNK_LENGTH = 3500;
 const READINESS_TIMEOUT_MS = 5000;
 const UPSTREAM_TIMEOUT_MS = 30000;
@@ -314,6 +315,15 @@ function splitSpeechText(input, maxLength = MAX_TTS_CHUNK_LENGTH) {
   return chunks;
 }
 
+function formatConversationPrompt(history, message) {
+  if (!history.length) return message;
+
+  const transcript = history
+    .map(({ role, content }) => `${role === "user" ? "User" : "Assistant"}: ${content}`)
+    .join("\n");
+  return `Recent conversation:\n${transcript}\n\nCurrent user message:\n${message}`;
+}
+
 function createApp(options = {}) {
   const app = express();
   const anythingLlmUrl = (
@@ -372,6 +382,32 @@ function createApp(options = {}) {
         });
   const fetchImpl = options.fetchImpl || global.fetch;
   const speechCache = new Map();
+  const conversationMemory = new Map();
+
+  function conversationMemoryKey(workspaceSlug, sessionId) {
+    return JSON.stringify([workspaceSlug, sessionId]);
+  }
+
+  function getConversationHistory(workspaceSlug, sessionId) {
+    return conversationMemory.get(
+      conversationMemoryKey(workspaceSlug, sessionId),
+    ) || [];
+  }
+
+  function rememberConversationTurn(
+    workspaceSlug,
+    sessionId,
+    userMessage,
+    assistantMessage,
+  ) {
+    const key = conversationMemoryKey(workspaceSlug, sessionId);
+    const history = [
+      ...getConversationHistory(workspaceSlug, sessionId),
+      { role: "user", content: userMessage },
+      { role: "assistant", content: assistantMessage },
+    ].slice(-MAX_CONVERSATION_MEMORY_MESSAGES);
+    conversationMemory.set(key, history);
+  }
 
   async function logChat(entry) {
     if (typeof chatLogger !== "function") return;
@@ -579,6 +615,14 @@ function createApp(options = {}) {
     }
 
     const workspaceSlug = WORKSPACES[request.body.workspace];
+    const userMessage = request.body.message.trim();
+    const messageWithoutAgentTrigger = userMessage
+      .replace(/^@agent\b/i, "")
+      .trim();
+    const conversationPrompt = formatConversationPrompt(
+      getConversationHistory(workspaceSlug, request.body.sessionId),
+      messageWithoutAgentTrigger,
+    );
     const turnId = randomUUID();
     const startedAt = Date.now();
     const inputMode = request.body.inputMode === "voice" ? "voice" : "text";
@@ -592,7 +636,7 @@ function createApp(options = {}) {
     await logChat({
       ...logContext,
       role: "user",
-      message: request.body.message.trim(),
+      message: userMessage,
       status: "received",
     });
     const logChatError = async (message, httpStatus) => {
@@ -618,9 +662,7 @@ function createApp(options = {}) {
             "Content-Type": "application/json",
           },
           body: JSON.stringify({
-            message: /^@agent\b/i.test(request.body.message.trim())
-              ? request.body.message.trim().replace(/^@agent\b/i, "@agent")
-              : `@agent ${request.body.message.trim()}`,
+            message: `@agent ${conversationPrompt}`,
             mode: "chat",
             sessionId: request.body.sessionId,
           }),
@@ -670,6 +712,12 @@ function createApp(options = {}) {
       }
 
       const displayText = formatDisplayText(assistantMessage);
+      rememberConversationTurn(
+        workspaceSlug,
+        request.body.sessionId,
+        messageWithoutAgentTrigger,
+        displayText,
+      );
       const speechText = request.body.voice
         ? formatSpeechText(assistantMessage)
         : "";
